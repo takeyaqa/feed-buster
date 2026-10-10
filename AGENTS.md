@@ -21,29 +21,29 @@
 ## Environment and Commands
 
 - Use Python 3.12 or later. `mise.toml` and the devcontainer select Python 3.12 for development.
-- The implementation and tests use only the Python standard library. Do not add third-party packages.
+- The script declares feedparser through PEP 723 inline metadata. Use uv to resolve and run it.
 - Run the complete test suite:
 
   ```sh
-  python3 -S -m unittest discover -s test -v
+  uv run --with feedparser -- python -m unittest discover -s test -v
   ```
 
 - Check Python syntax:
 
   ```sh
-  python3 -m py_compile skills/summarize-feeds/scripts/rss_fetch.py test/test_rss_fetch.py
+  uv run -- python -m py_compile skills/summarize-feeds/scripts/rss_fetch.py test/test_rss_fetch.py
   ```
 
 - Inspect the CLI without network access:
 
   ```sh
-  python3 skills/summarize-feeds/scripts/rss_fetch.py --help
+  uv run --script skills/summarize-feeds/scripts/rss_fetch.py --help
   ```
 
 - A live fetch requires internet access:
 
   ```sh
-  python3 skills/summarize-feeds/scripts/rss_fetch.py \
+  uv run --script skills/summarize-feeds/scripts/rss_fetch.py \
     [--item-limit INTEGER] [--max-age-days INTEGER] \
     skills/summarize-feeds/assets/example.feeds.opml
   ```
@@ -55,7 +55,7 @@
 - Follow PEP 8 with four-space indentation and standard Python naming.
 - Preserve the minimal public API. `RSSFetch.collect_feeds` is the intended public operation; prefix implementation helpers
   with `_`.
-- Inject collaborators as objects with a `fetch` method. Parser and collection tests should use deterministic fake fetchers.
+- Inject collaborators as objects with a `parse` method returning feedparser results. Collection tests should use deterministic fake parsers.
 - Validate inputs at the boundary and keep error messages specific. Expected feed transport and parsing failures should
   be represented in the result; unexpected collaborator or programming errors should propagate.
 - Avoid stateful per-run options. `item_limit`, `max_age_days`, `now`, and `progress` belong to `collect_feeds`.
@@ -63,7 +63,7 @@
 ## Testing and Verification
 
 - Add or update unittest coverage for every behavior change. Prefer inline RSS/Atom/OPML fixtures and injected sequential
-  fetchers so tests remain fast and offline. HTTP/CLI tests use a loopback server; they require local socket access but no
+  parsers so tests remain fast and offline. HTTP/CLI tests use a loopback server; they require local socket access but no
   internet access.
 - Cover success, boundary, and failure cases when changing validation, filtering, parsing, or CLI contracts.
 - Before handing off a change, run the full test suite and the syntax check. Also inspect the relevant CLI path when

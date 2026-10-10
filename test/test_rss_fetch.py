@@ -11,11 +11,13 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+import socket
+
+import feedparser
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from rss_fetch import FeedError, FetchError, HTTPFeedFetcher, OPMLFeedLoader, RSSFetch
+from rss_fetch import FeedError, OPMLFeedLoader, RSSFetch
 
 RDF_XML = """<?xml version="1.0"?>
 <rdf:RDF
@@ -91,22 +93,25 @@ ATOM_XML = """<?xml version="1.0"?>
 </feed>
 """
 
-class SequentialFetcher:
+class SequentialParser:
     def __init__(self, *responses):
         self.responses = iter(responses)
         self.urls = []
 
-    def fetch(self, url):
+    def parse(self, url):
         self.urls.append(url)
         response = next(self.responses)
         if isinstance(response, Exception):
             raise response
-        return response
+        if isinstance(response, dict):
+            return response
+        data = response.encode("utf-8") if isinstance(response, str) else response
+        return feedparser.parse(io.BytesIO(data))
 
 
 def collector(*responses):
     return RSSFetch(feeds=[{"name": "Feed", "url": "https://example.com/feed"}],
-                    feed_fetcher=SequentialFetcher(*responses))
+                    feed_parser=SequentialParser(*responses))
 
 
 def items(xml, **options):
@@ -218,15 +223,14 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_atom_xhtml_and_binary_content(self):
         markup = '<div xmlns="http://www.w3.org/1999/xhtml">A <b>B</b> C</div>'
-        self.assertEqual(markup, items(atom(ATOM_DATE + f'<summary type="xhtml">{markup}</summary>'))[0]['summary'])
+        self.assertEqual('A <b>B</b> C', items(atom(ATOM_DATE + f'<summary type="xhtml">{markup}</summary>'))[0]['summary'])
         self.assertEqual('Hello', items(atom(ATOM_DATE + '<content type="image/png">SGVsbG8=</content>'))[0]['summary'])
         self.assertEqual('', items(atom(ATOM_DATE + '<content src="https://example.com/body" type="text/plain"/>'))[0]['summary'])
 
-    def test_atom_xhtml_preserves_inherited_namespaces(self):
+    def test_atom_xhtml_is_normalized(self):
         xml = atom(ATOM_DATE + '<summary type="xhtml" xmlns:h="http://www.w3.org/1999/xhtml">'
                    '<h:div><h:b>A &amp; B</h:b><h:br/></h:div></summary>')
-        expected = ('<h:div xmlns="http://www.w3.org/2005/Atom" '
-                    'xmlns:h="http://www.w3.org/1999/xhtml"><h:b>A & B</h:b><h:br/></h:div>')
+        expected = '<b>A &amp; B</b><br />'
         self.assertEqual(expected, items(xml)[0]['summary'])
 
     def test_date_format_fallbacks_and_rollover(self):
@@ -239,10 +243,10 @@ class RSSFetchTest(unittest.TestCase):
         xml = rss('<item><title>X</title><pubDate>2026-08-10T12:00:00Z</pubDate></item>')
         self.assertEqual('2026-08-10T12:00:00+00:00', items(xml)[0]['published'])
 
-    def test_duplicate_scalar_fields_use_last_value(self):
+    def test_duplicate_scalar_fields_follow_feedparser(self):
         for xml in [atom(ATOM_DATE + '<title>First</title><title>Last</title>'),
                     rss('<item>' + DATE + '<title>First</title><title>Last</title></item>')]:
-            self.assertEqual('Last', items(xml)[0]['title'])
+            self.assertEqual('First', items(xml)[0]['title'])
 
     def test_feed_encoding_declaration(self):
         xml = '<?xml version="1.0" encoding="ISO-8859-1"?>' + atom(ATOM_DATE + '<title>Café</title>')
@@ -250,7 +254,7 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_atom_link_selection(self):
         for links, expected in [('<link rel="self" href="self"/><link href=" default "/>', 'default'),
-                                ('<link rel="self" href=" first "/><link rel="alternate" href=" "/>', 'first'),
+                                ('<link rel="self" href=" first "/><link rel="alternate" href=" "/>', ''),
                                 ('<link href=" "/>', ''), ('', '')]:
             with self.subTest(links=links):
                 self.assertEqual(expected, items(atom(ATOM_DATE + links))[0]['link'])
@@ -268,24 +272,25 @@ class RSSFetchTest(unittest.TestCase):
         self.assertEqual('2026-08-10T12:00:00+00:00', items(atom('<published>invalid</published>' + ATOM_DATE))[0]['published'])
         self.assertEqual([], items(atom('<updated>invalid</updated>')))
         self.assertEqual([], items(rss('<item><title>X</title><pubDate>invalid</pubDate></item>')))
-        self.assertEqual([], items(rss('<item><title>X</title><dc:date>2026-08-10T12:00:00Z</dc:date></item>')))
+        self.assertEqual('2026-08-10T12:00:00+00:00',
+                         items(rss('<item><title>X</title><dc:date>2026-08-10T12:00:00Z</dc:date></item>'))[0]['published'])
 
     def test_preserves_order_and_duplicate_articles(self):
         xml = rss('<item><title>Old</title><pubDate>Sun, 9 Aug 2026 12:00:00 GMT</pubDate></item>' +
                   '<item><title>New</title>' + DATE + '</item>' + '<item><title>New</title>' + DATE + '</item>')
         self.assertEqual(['Old', 'New', 'New'], [item['title'] for item in items(xml)])
 
-    def test_uses_injected_feed_fetcher(self):
-        fetcher = SequentialFetcher(RSS_XML)
+    def test_uses_injected_feed_parser(self):
+        fetcher = SequentialParser(RSS_XML)
         result = RSSFetch(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}],
-                          feed_fetcher=fetcher).collect_feeds(progress=False)
+                          feed_parser=fetcher).collect_feeds(progress=False)
         self.assertFalse(result.has_errors())
         self.assertEqual(['https://example.com/rss'], fetcher.urls)
         self.assertEqual(2, len(result.feeds[0]['items']))
 
-    def test_rejects_feed_fetcher_without_fetch(self):
-        with self.assertRaisesRegex(ValueError, 'feed_fetcher must respond to fetch'):
-            RSSFetch(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}], feed_fetcher=object())
+    def test_rejects_feed_parser_without_parse(self):
+        with self.assertRaisesRegex(ValueError, 'feed_parser must respond to parse'):
+            RSSFetch(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}], feed_parser=object())
 
     def test_rejects_invalid_constructor_arguments(self):
         for feeds, message in [(None, 'feeds must be a non-empty array'), ([], 'feeds must be a non-empty array'),
@@ -325,28 +330,32 @@ class RSSFetchTest(unittest.TestCase):
     def test_continues_after_http_and_parse_errors(self):
         names = ['Good', 'HTTP error', 'Bad XML', 'Unsupported']
         result = RSSFetch(feeds=[dict(name=name, url='https://example.com') for name in names],
-                          feed_fetcher=SequentialFetcher(RSS_XML, FetchError('fetch error: unavailable'),
+                          feed_parser=SequentialParser(RSS_XML, OSError('unavailable'),
                                                          '<rss>', '<html/>')).collect_feeds(progress=False)
         self.assertTrue(result.has_errors())
         self.assertEqual(['Good'], [feed['name'] for feed in result.feeds])
         self.assertEqual(names[1:], [feed['name'] for feed in result.errors])
-        self.assertTrue(result.errors[1]['error'].startswith('invalid XML: '))
+        self.assertTrue(result.errors[1]['error'].startswith('invalid feed: '))
         self.assertEqual('unsupported feed format (expected RSS or Atom)', result.errors[2]['error'])
 
     def test_preserves_feed_and_error_output_schema(self):
         result = RSSFetch(feeds=[dict(name='Good', url='good'), dict(name='Bad', url='bad')],
-                          feed_fetcher=SequentialFetcher(RSS_XML, FetchError('fetch error: unavailable'))
+                          feed_parser=SequentialParser(RSS_XML, OSError('unavailable'))
                           ).collect_feeds(progress=False)
         self.assertEqual({'feeds': [dict(name='Good', url='good', items=items(RSS_XML))],
                           'errors': [dict(name='Bad', url='bad', error='fetch error: unavailable')]}, result.to_dict())
 
-    def test_rss_conversion_required_fields(self):
-        for xml, message in [(rss('<item>' + DATE + '</item>'), 'maker.item are not set: title'),
-                             (rss('', '<link>https://example.com</link>'), 'maker.channel.author are not set: name'),
-                             (rss('', '<title>Feed</title>'), 'maker.channel are not set: id')]:
-            with self.subTest(xml=xml):
-                result = collector(xml).collect_feeds(progress=False)
-                self.assertEqual('invalid XML: required variables of ' + message, result.errors[0]['error'])
+    def test_missing_rss_metadata_is_accepted(self):
+        for channel in ['', '<title>Feed</title>', '<link>https://example.com</link>']:
+            with self.subTest(channel=channel):
+                self.assertEqual([dict(title='', link='', published='2026-08-10T12:00:00+00:00', summary='')],
+                                 items(rss('<item>' + DATE + '</item>', channel)))
+
+    def test_rejects_malformed_feed_even_with_recoverable_entries(self):
+        result = collector(RSS_XML.replace('</channel>', '')).collect_feeds(progress=False)
+        self.assertEqual([], result.feeds)
+        self.assertEqual(1, len(result.errors))
+        self.assertTrue(result.errors[0]['error'].startswith('invalid feed: '))
 
     def test_does_not_convert_unexpected_fetcher_errors(self):
         with self.assertRaisesRegex(RuntimeError, 'implementation error'):
@@ -372,9 +381,10 @@ class CLITest(unittest.TestCase):
                 if self.path == '/missing':
                     self.send_error(404)
                     return
-                self.send_response(200)
+                self.send_response(503 if self.path == "/server-error" else 200)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
                 self.end_headers()
-                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/bad': '<rss>'}.get(self.path, '<html/>').encode())
+                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/bad': '<rss>', '/server-error': RSS_XML}.get(self.path, '<html/>').encode())
 
             def log_message(self, *args):
                 pass
@@ -391,7 +401,7 @@ class CLITest(unittest.TestCase):
         cls.thread.join()
 
     def run_cli(self, *arguments):
-        return subprocess.run([sys.executable, '-S', str(SCRIPT), *arguments],
+        return subprocess.run(['uv', 'run', '--script', str(SCRIPT), *arguments],
                               capture_output=True, text=True, timeout=10)
 
     def config(self, directory, *paths):
@@ -462,13 +472,23 @@ class CLITest(unittest.TestCase):
                                      [feed['name'] for feed in data['feeds']])
                     self.assertEqual('fetch error: 404 Not Found', data['errors'][0]['error'])
 
-    def test_timeout_and_transport_errors(self):
-        with patch('rss_fetch.urlopen', side_effect=TimeoutError('timed out')) as fetch:
-            with self.assertRaisesRegex(FetchError, 'fetch error: timed out'):
-                HTTPFeedFetcher().fetch(self.url)
-            fetch.assert_called_once_with(self.url, timeout=10)
-        with self.assertRaises(FetchError):
-            HTTPFeedFetcher().fetch('not a URL')
+    def test_connection_failure(self):
+        # Reserve a port without listening so the connection fails immediately.
+        with socket.socket() as reserved:
+            reserved.bind(('127.0.0.1', 0))
+            url = f'http://127.0.0.1:{reserved.getsockname()[1]}/feed'
+            result = RSSFetch(feeds=[dict(name='Unavailable', url=url)]).collect_feeds(progress=False)
+        self.assertEqual([], result.feeds)
+        self.assertEqual(1, len(result.errors))
+        self.assertTrue(result.errors[0]['error'].startswith('fetch error: '))
+
+    def test_http_error_with_valid_feed_body_is_not_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_cli(self.config(directory, '/server-error'))
+        self.assertEqual(1, result.returncode)
+        data = json.loads(result.stdout)
+        self.assertEqual([], data['feeds'])
+        self.assertEqual('fetch error: 503 Service Unavailable', data['errors'][0]['error'])
 
 
 if __name__ == '__main__':
