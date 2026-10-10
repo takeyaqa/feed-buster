@@ -23,6 +23,9 @@ primarily in the conversation.
 - Python 3.12 or later and uv (feedparser is installed automatically from PEP 723 script metadata)
 - Internet access to fetch feeds
 
+RSS/Atom parsing, date recognition, and HTML normalization follow feedparser.
+OPML configuration loading uses the Python standard library. Malformed feeds are reported in `errors`.
+
 ## Installation
 
 ### Using GitHub CLI

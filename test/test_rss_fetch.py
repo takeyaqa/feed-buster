@@ -218,15 +218,14 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_atom_xhtml_and_binary_content(self):
         markup = '<div xmlns="http://www.w3.org/1999/xhtml">A <b>B</b> C</div>'
-        self.assertEqual(markup, items(atom(ATOM_DATE + f'<summary type="xhtml">{markup}</summary>'))[0]['summary'])
+        self.assertEqual('A <b>B</b> C', items(atom(ATOM_DATE + f'<summary type="xhtml">{markup}</summary>'))[0]['summary'])
         self.assertEqual('Hello', items(atom(ATOM_DATE + '<content type="image/png">SGVsbG8=</content>'))[0]['summary'])
         self.assertEqual('', items(atom(ATOM_DATE + '<content src="https://example.com/body" type="text/plain"/>'))[0]['summary'])
 
-    def test_atom_xhtml_preserves_inherited_namespaces(self):
+    def test_atom_xhtml_is_normalized(self):
         xml = atom(ATOM_DATE + '<summary type="xhtml" xmlns:h="http://www.w3.org/1999/xhtml">'
                    '<h:div><h:b>A &amp; B</h:b><h:br/></h:div></summary>')
-        expected = ('<h:div xmlns="http://www.w3.org/2005/Atom" '
-                    'xmlns:h="http://www.w3.org/1999/xhtml"><h:b>A & B</h:b><h:br/></h:div>')
+        expected = '<b>A &amp; B</b><br />'
         self.assertEqual(expected, items(xml)[0]['summary'])
 
     def test_date_format_fallbacks_and_rollover(self):
@@ -239,10 +238,10 @@ class RSSFetchTest(unittest.TestCase):
         xml = rss('<item><title>X</title><pubDate>2026-08-10T12:00:00Z</pubDate></item>')
         self.assertEqual('2026-08-10T12:00:00+00:00', items(xml)[0]['published'])
 
-    def test_duplicate_scalar_fields_use_last_value(self):
+    def test_duplicate_scalar_fields_follow_feedparser(self):
         for xml in [atom(ATOM_DATE + '<title>First</title><title>Last</title>'),
                     rss('<item>' + DATE + '<title>First</title><title>Last</title></item>')]:
-            self.assertEqual('Last', items(xml)[0]['title'])
+            self.assertEqual('First', items(xml)[0]['title'])
 
     def test_feed_encoding_declaration(self):
         xml = '<?xml version="1.0" encoding="ISO-8859-1"?>' + atom(ATOM_DATE + '<title>Café</title>')
@@ -250,7 +249,7 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_atom_link_selection(self):
         for links, expected in [('<link rel="self" href="self"/><link href=" default "/>', 'default'),
-                                ('<link rel="self" href=" first "/><link rel="alternate" href=" "/>', 'first'),
+                                ('<link rel="self" href=" first "/><link rel="alternate" href=" "/>', ''),
                                 ('<link href=" "/>', ''), ('', '')]:
             with self.subTest(links=links):
                 self.assertEqual(expected, items(atom(ATOM_DATE + links))[0]['link'])
@@ -268,7 +267,8 @@ class RSSFetchTest(unittest.TestCase):
         self.assertEqual('2026-08-10T12:00:00+00:00', items(atom('<published>invalid</published>' + ATOM_DATE))[0]['published'])
         self.assertEqual([], items(atom('<updated>invalid</updated>')))
         self.assertEqual([], items(rss('<item><title>X</title><pubDate>invalid</pubDate></item>')))
-        self.assertEqual([], items(rss('<item><title>X</title><dc:date>2026-08-10T12:00:00Z</dc:date></item>')))
+        self.assertEqual('2026-08-10T12:00:00+00:00',
+                         items(rss('<item><title>X</title><dc:date>2026-08-10T12:00:00Z</dc:date></item>'))[0]['published'])
 
     def test_preserves_order_and_duplicate_articles(self):
         xml = rss('<item><title>Old</title><pubDate>Sun, 9 Aug 2026 12:00:00 GMT</pubDate></item>' +
@@ -330,7 +330,7 @@ class RSSFetchTest(unittest.TestCase):
         self.assertTrue(result.has_errors())
         self.assertEqual(['Good'], [feed['name'] for feed in result.feeds])
         self.assertEqual(names[1:], [feed['name'] for feed in result.errors])
-        self.assertTrue(result.errors[1]['error'].startswith('invalid XML: '))
+        self.assertTrue(result.errors[1]['error'].startswith('invalid feed: '))
         self.assertEqual('unsupported feed format (expected RSS or Atom)', result.errors[2]['error'])
 
     def test_preserves_feed_and_error_output_schema(self):
@@ -340,13 +340,25 @@ class RSSFetchTest(unittest.TestCase):
         self.assertEqual({'feeds': [dict(name='Good', url='good', items=items(RSS_XML))],
                           'errors': [dict(name='Bad', url='bad', error='fetch error: unavailable')]}, result.to_dict())
 
-    def test_rss_conversion_required_fields(self):
-        for xml, message in [(rss('<item>' + DATE + '</item>'), 'maker.item are not set: title'),
-                             (rss('', '<link>https://example.com</link>'), 'maker.channel.author are not set: name'),
-                             (rss('', '<title>Feed</title>'), 'maker.channel are not set: id')]:
-            with self.subTest(xml=xml):
-                result = collector(xml).collect_feeds(progress=False)
-                self.assertEqual('invalid XML: required variables of ' + message, result.errors[0]['error'])
+    def test_missing_rss_metadata_is_accepted(self):
+        for channel in ['', '<title>Feed</title>', '<link>https://example.com</link>']:
+            with self.subTest(channel=channel):
+                self.assertEqual([dict(title='', link='', published='2026-08-10T12:00:00+00:00', summary='')],
+                                 items(rss('<item>' + DATE + '</item>', channel)))
+
+    def test_rejects_malformed_feed_even_with_recoverable_entries(self):
+        result = collector(RSS_XML.replace('</channel>', '')).collect_feeds(progress=False)
+        self.assertEqual([], result.feeds)
+        self.assertEqual(1, len(result.errors))
+        self.assertTrue(result.errors[0]['error'].startswith('invalid feed: '))
+
+    def test_feed_content_is_not_treated_as_a_file_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'feed.xml'
+            path.write_text(RSS_XML)
+            result = collector(str(path)).collect_feeds(progress=False)
+        self.assertEqual([], result.feeds)
+        self.assertEqual(1, len(result.errors))
 
     def test_does_not_convert_unexpected_fetcher_errors(self):
         with self.assertRaisesRegex(RuntimeError, 'implementation error'):
