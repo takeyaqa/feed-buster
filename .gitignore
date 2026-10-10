@@ -23,3 +23,7 @@
 .agents/
 *-workspace/
 skills-lock.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
