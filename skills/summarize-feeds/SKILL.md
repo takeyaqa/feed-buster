@@ -1,7 +1,7 @@
 ---
 name: summarize-feeds
 description: Fetch RSS and Atom feeds with the bundled scripts/rss_fetch.py and OPML 2.0 feed configuration files in assets, then summarize highlights and all articles from the resulting JSON in the user's language. Use when asked to fetch or summarize configured feeds, recent articles, article lists, or RSS digests. Do not use for general web searches, arbitrary URL research, or inspecting the full text behind article links.
-compatibility: Requires Python 3.12 or later and internet access. Uses only the Python standard library; no packages to install.
+compatibility: Requires uv, Python 3.12 or later, and internet access. uv installs feedparser from PEP 723 script metadata automatically.
 ---
 
 # Fetch and Summarize Feeds
@@ -12,7 +12,7 @@ evidence.
 
 ## Fetch
 
-1. Use Python 3 and `scripts/rss_fetch.py` as the fetching script. If it does not exist, report the problem and stop.
+1. Use `uv run --script` and `scripts/rss_fetch.py` as the fetching script. If it does not exist, report the problem and stop.
 2. Read `assets/index.yaml`. If it does not exist, cannot be parsed as YAML, or its `configs` value is not an array,
    report the problem and stop.
 3. Compare the user's instructions with the `name` and `description` of each `configs` entry, and select the configuration
@@ -27,7 +27,7 @@ evidence.
    configuration file.
 
    ```sh
-   python3 scripts/rss_fetch.py [--item-limit INTEGER] [--max-age-days INTEGER] <opml-file>
+   uv run --script scripts/rss_fetch.py [--item-limit INTEGER] [--max-age-days INTEGER] <opml-file>
    ```
 
 6. Preserve standard output, standard error, and the exit code. Do not save fetched results or summaries to files in the

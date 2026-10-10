@@ -391,7 +391,7 @@ class CLITest(unittest.TestCase):
         cls.thread.join()
 
     def run_cli(self, *arguments):
-        return subprocess.run([sys.executable, '-S', str(SCRIPT), *arguments],
+        return subprocess.run(['uv', 'run', '--script', str(SCRIPT), *arguments],
                               capture_output=True, text=True, timeout=10)
 
     def config(self, directory, *paths):

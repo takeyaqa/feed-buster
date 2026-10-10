@@ -1,7 +1,12 @@
-#!/usr/bin/env python3
-"""Fetch OPML-configured RSS and Atom feeds using only the standard library."""
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "feedparser",
+# ]
+# ///
+"""Fetch OPML-configured RSS and Atom feeds with feedparser."""
 
-import base64
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -16,6 +21,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 from xml.dom import Node, minidom
 from xml.parsers.expat import ExpatError
+
+import feedparser
 
 ATOM = "http://www.w3.org/2005/Atom"
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -187,19 +194,23 @@ class RSSFetch:
             document = minidom.parseString(data)
         except (ExpatError, LookupError, UnicodeError) as error:
             raise FeedError(f"invalid XML: {error}") from error
+        # Retain strict XML validation and raw text where feedparser normalizes
+        # markup, duplicate fields, or dates differently from the output contract.
+        parsed = feedparser.parse(data, sanitize_html=False, resolve_relative_uris=False)
         with document:
             root = document.documentElement
             if (root.namespaceURI, root.localName) == (ATOM, "feed"):
-                items = [self._atom_item(entry) for entry in _children(root, "entry", ATOM)]
+                items = [self._atom_item(entry, source) for entry, source in
+                         zip(parsed.entries, _children(root, "entry", ATOM), strict=True)]
             elif (root.namespaceURI, root.localName) == (None, "rss"):
-                items = self._rss_items(root, None)
+                items = self._rss_items(root, None, parsed.entries)
             elif (root.namespaceURI, root.localName) == (RDF, "RDF"):
-                items = self._rss_items(root, RSS1)
+                items = self._rss_items(root, RSS1, parsed.entries)
             else:
                 raise FeedError("unsupported feed format (expected RSS or Atom)")
             return [item for item in items if item["published"]]
 
-    def _rss_items(self, root, namespace):
+    def _rss_items(self, root, namespace, entries):
         channel = _child(root, "channel", namespace)
         if channel is None:
             raise FeedError("invalid XML: required variables of maker.channel are not set: id, title")
@@ -216,7 +227,7 @@ class RSSFetch:
             raise FeedError("invalid XML: required variables of maker.channel are not set: " + ", ".join(missing))
         items = []
         parent = root if namespace == RSS1 else channel
-        for entry in _children(parent, "item", namespace):
+        for parsed, entry in zip(entries, _children(parent, "item", namespace), strict=True):
             published = (_date(_text(_child(entry, "date", DC))) if namespace == RSS1
                          else _date(_text(_child(entry, "pubDate"))))
             if published is None:
@@ -227,22 +238,36 @@ class RSSFetch:
             summary = _text(_child(entry, "description", namespace))
             if summary is None:
                 summary = _text(_child(entry, "encoded", CONTENT))
-            items.append(self._normalized_item(title, _text(_child(entry, "link", namespace)), published, summary))
+            if len(_children(entry, "title", namespace)) == 1:
+                title = parsed.get("title", title)
+            link = parsed.get("link", "") if _child(entry, "link", namespace) is not None else ""
+            items.append(self._normalized_item(title, link, published, summary))
         return items
 
-    def _atom_item(self, entry):
-        summary = self._atom_text(_child(entry, "summary", ATOM))
-        if summary is None:
-            summary = self._atom_text(_child(entry, "content", ATOM))
-        links = [link for link in _children(entry, "link", ATOM) if _strip(link.getAttribute("href"))]
-        selected = next((link for link in links
-                         if not link.hasAttribute("rel") or link.getAttribute("rel") == "alternate"),
-                        next(iter(links), None))
-        published = (_date(_text(_child(entry, "published", ATOM)))
-                     or _date(_text(_child(entry, "updated", ATOM))))
-        return self._normalized_item(self._atom_text(_child(entry, "title", ATOM)),
-                                     selected.getAttribute("href") if selected is not None else "",
-                                     published, summary)
+    def _atom_item(self, entry, source):
+        summary_node = _child(source, "summary", ATOM)
+        if summary_node is None:
+            summary_node = _child(source, "content", ATOM)
+        summary = entry.get("summary", "")
+        if summary_node is not None:
+            kind = summary_node.getAttribute("type")
+            if (summary_node.localName == "content" and kind not in ("", "text", "html")
+                    and not kind.startswith("text/") and kind != "xhtml"
+                    and not kind.endswith(("/xml", "+xml"))):
+                summary = next(iter(entry.get("content", [])), {}).get("value", "")
+            else:
+                summary = self._atom_text(summary_node)
+        links = [link for link in entry.get("links", []) if _strip(link.get("href"))]
+        selected = next((link for link in links if link.get("rel", "alternate") == "alternate"),
+                        next(iter(links), {}))
+        published = (_date(_text(_child(source, "published", ATOM)))
+                     or _date(_text(_child(source, "updated", ATOM))))
+        title = entry.get("title", "")
+        title_node = _child(source, "title", ATOM)
+        if (len(_children(source, "title", ATOM)) > 1
+                or (title_node is not None and title_node.getAttribute("type") in ("html", "xhtml"))):
+            title = self._atom_text(title_node)
+        return self._normalized_item(title, selected.get("href", ""), published, summary)
 
     def _atom_text(self, element):
         if element is None:
@@ -257,10 +282,7 @@ class RSSFetch:
             return self._xml_text(nodes[0], include_namespaces=True)
         if element.localName == "content" and (kind.endswith("/xml") or kind.endswith("+xml")):
             return "".join(self._xml_text(node, include_namespaces=True) for node in element.childNodes)
-        value = _text(element)
-        if element.localName == "content" and kind not in ("", "text", "html") and not kind.startswith("text/"):
-            value = base64.b64decode(value).decode("utf-8")
-        return value
+        return _text(element)
 
     def _xml_text(self, node, include_namespaces=False):
         # RSS's XML content preserves markup and decoded character data.

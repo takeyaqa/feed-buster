@@ -20,7 +20,7 @@ primarily in the conversation.
 
 ## Requirements
 
-- Python 3.12 or later (standard library only; no pip packages required)
+- Python 3.12 or later and uv (feedparser is installed automatically from PEP 723 script metadata)
 - Internet access to fetch feeds
 
 ## Installation
