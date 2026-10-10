@@ -11,14 +11,12 @@ from calendar import timegm
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import getopt
-from io import BytesIO
 import http.client
 import json
 from pathlib import Path
 import re
 import sys
-from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.error import URLError
 from xml.dom import Node, minidom
 from xml.parsers.expat import ExpatError
 
@@ -79,10 +77,6 @@ class FeedError(Exception):
     pass
 
 
-class FetchError(Exception):
-    pass
-
-
 @dataclass
 class Result:
     feeds: list = field(default_factory=list)
@@ -95,23 +89,10 @@ class Result:
         return {"feeds": self.feeds, "errors": self.errors}
 
 
-class HTTPFeedFetcher:
-    def fetch(self, url):
-        try:
-            with urlopen(url, timeout=RSSFetch.FETCH_TIMEOUT_SECONDS) as response:
-                return response.read()
-        except HTTPError as error:
-            raise FetchError(f"fetch error: {error.code} {error.reason}") from error
-        except (URLError, OSError, ValueError, http.client.HTTPException) as error:
-            reason = error.reason if isinstance(error, URLError) else error
-            raise FetchError(f"fetch error: {reason}") from error
-
-
 class RSSFetch:
     SUMMARY_MAX_LENGTH = 1_000
-    FETCH_TIMEOUT_SECONDS = 10
 
-    def __init__(self, *, feeds, feed_fetcher=None):
+    def __init__(self, *, feeds, feed_parser=None):
         if not isinstance(feeds, list) or not feeds:
             raise ValueError("feeds must be a non-empty array")
         for index, feed in enumerate(feeds):
@@ -120,12 +101,12 @@ class RSSFetch:
             for key in ("name", "url"):
                 if not isinstance(feed.get(key), str) or not _strip(feed[key]):
                     raise ValueError(f"feeds[{index}].{key} must be a non-empty string")
-        if feed_fetcher is None:
-            feed_fetcher = HTTPFeedFetcher()
-        if not callable(getattr(feed_fetcher, "fetch", None)):
-            raise ValueError("feed_fetcher must respond to fetch")
+        if feed_parser is None:
+            feed_parser = feedparser
+        if not callable(getattr(feed_parser, "parse", None)):
+            raise ValueError("feed_parser must respond to parse")
         self._feeds = feeds
-        self._feed_fetcher = feed_fetcher
+        self._feed_parser = feed_parser
 
     def collect_feeds(self, *, item_limit=None, max_age_days=None, now=None, progress=True):
         if item_limit is not None and (type(item_limit) is not int or item_limit <= 0):
@@ -138,7 +119,7 @@ class RSSFetch:
             if progress:
                 print(f"Fetching: {feed['name']}", file=sys.stderr)
             try:
-                items = self._parse_feed(self._feed_fetcher.fetch(feed["url"]))
+                items = self._parse_feed(feed["url"])
                 if max_age_days is not None:
                     # Subtract datetimes instead of days from now to support arbitrarily large limits.
                     items = [item for item in items
@@ -146,15 +127,23 @@ class RSSFetch:
                 if item_limit is not None:
                     items = items[:item_limit]
                 result.feeds.append({**feed, "items": items})
-            except (FeedError, FetchError) as error:
+            except FeedError as error:
                 result.errors.append({**feed, "error": str(error)})
         return result
 
-    def _parse_feed(self, data):
-        # Parse fetched content only; feedparser must not fetch URLs or open paths.
-        source = data.encode("utf-8") if isinstance(data, str) else data
-        parsed = feedparser.parse(BytesIO(source))
+    def _parse_feed(self, url):
+        try:
+            parsed = self._feed_parser.parse(url)
+        except (URLError, OSError, ValueError, http.client.HTTPException) as error:
+            raise FeedError(f"fetch error: {error}") from error
+        status = parsed.get("status", 200)
+        if status >= 400:
+            reason = http.client.responses.get(status, "HTTP error")
+            raise FeedError(f"fetch error: {status} {reason}")
         if parsed.bozo:
+            error = parsed.bozo_exception
+            if isinstance(error, (URLError, OSError, http.client.HTTPException)):
+                raise FeedError(f"fetch error: {error}") from error
             raise FeedError(f"invalid feed: {parsed.bozo_exception}")
         if not parsed.version.startswith(("rss", "atom")):
             raise FeedError("unsupported feed format (expected RSS or Atom)")

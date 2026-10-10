@@ -55,7 +55,7 @@
 - Follow PEP 8 with four-space indentation and standard Python naming.
 - Preserve the minimal public API. `RSSFetch.collect_feeds` is the intended public operation; prefix implementation helpers
   with `_`.
-- Inject collaborators as objects with a `fetch` method. Parser and collection tests should use deterministic fake fetchers.
+- Inject collaborators as objects with a `parse` method returning feedparser results. Collection tests should use deterministic fake parsers.
 - Validate inputs at the boundary and keep error messages specific. Expected feed transport and parsing failures should
   be represented in the result; unexpected collaborator or programming errors should propagate.
 - Avoid stateful per-run options. `item_limit`, `max_age_days`, `now`, and `progress` belong to `collect_feeds`.
@@ -63,7 +63,7 @@
 ## Testing and Verification
 
 - Add or update unittest coverage for every behavior change. Prefer inline RSS/Atom/OPML fixtures and injected sequential
-  fetchers so tests remain fast and offline. HTTP/CLI tests use a loopback server; they require local socket access but no
+  parsers so tests remain fast and offline. HTTP/CLI tests use a loopback server; they require local socket access but no
   internet access.
 - Cover success, boundary, and failure cases when changing validation, filtering, parsing, or CLI contracts.
 - Before handing off a change, run the full test suite and the syntax check. Also inspect the relevant CLI path when
