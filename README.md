@@ -18,6 +18,11 @@ primarily in the conversation.
 - Summarizes the results in the user's language, organized as highlights, an article list, and fetch errors
 - Continues processing successfully fetched articles even when some feeds fail
 
+## Requirements
+
+- Python 3.12 or later (standard library only; no pip packages required)
+- Internet access to fetch feeds
+
 ## Installation
 
 ### Using GitHub CLI
