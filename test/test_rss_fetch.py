@@ -167,6 +167,27 @@ class OPMLFeedLoaderTest(unittest.TestCase):
         self.assertEqual([' Parent ', 'Child'], [feed['name'] for feed in self.load_opml(xml)])
         self.assertEqual(' https://example.com ', self.load_opml(xml)[0]['url'])
 
+    def test_loads_namespaced_opml_and_ignores_unrelated_elements(self):
+        for prefix, declaration in [('', 'xmlns="urn:opml"'), ('o:', 'xmlns:o="urn:opml"')]:
+            with self.subTest(prefix=prefix):
+                xml = f'''<{prefix}opml version="2.0" {declaration} xmlns:x="urn:other">
+                  <{prefix}body>
+                    <x:outline text="Ignored" xmlUrl="https://example.com/ignored" />
+                    <{prefix}outline text="Group">
+                      <{prefix}outline text="Feed" xmlUrl="https://example.com/feed" />
+                    </{prefix}outline>
+                  </{prefix}body>
+                </{prefix}opml>'''
+                self.assertEqual([{'name': 'Feed', 'url': 'https://example.com/feed'}],
+                                 self.load_opml(xml))
+
+    def test_body_must_be_a_direct_child(self):
+        xml = '''<opml version="2.0"><head><body>
+          <outline text="Feed" xmlUrl="https://example.com/feed" />
+        </body></head></opml>'''
+        with self.assertRaisesRegex(ValueError, 'OPML body is required'):
+            self.load_opml(xml)
+
     def test_rejects_unicode_whitespace_only_attributes(self):
         for attribute in ['text', 'xmlUrl']:
             with self.subTest(attribute=attribute), self.assertRaises(ValueError):

@@ -17,55 +17,46 @@ from pathlib import Path
 import re
 import sys
 from urllib.error import URLError
-from xml.dom import Node, minidom
-from xml.parsers.expat import ExpatError
+from xml.etree import ElementTree
 
 import feedparser
 
 UTC = timezone.utc
 
 
-def _children(parent, name, namespace=None):
-    if parent is None:
-        return []
-    return [child for child in parent.childNodes
-            if child.nodeType == Node.ELEMENT_NODE and child.localName == name
-            and child.namespaceURI == namespace]
-
-
 class OPMLFeedLoader:
     @staticmethod
     def load(path):
         try:
-            document = minidom.parseString(Path(path).read_text(encoding="utf-8"))
-        except ExpatError as error:
+            root = ElementTree.fromstring(Path(path).read_text(encoding="utf-8"))
+        except ElementTree.ParseError as error:
             raise ValueError(f"invalid XML: {error}") from error
-        with document:
-            root = document.documentElement
-            if root.localName != "opml":
-                raise ValueError("document root must be opml")
-            if root.getAttribute("version") != "2.0":
-                raise ValueError("OPML version must be 2.0")
-            body = next(iter(_children(root, "body", root.namespaceURI)), None)
-            if body is None:
-                raise ValueError("OPML body is required")
-            feeds = []
-            OPMLFeedLoader._collect(body, feeds)
-            if not feeds:
-                raise ValueError("OPML must contain at least one feed")
-            return feeds
+        namespace, _, name = root.tag.rpartition("}")
+        if name != "opml":
+            raise ValueError("document root must be opml")
+        if root.get("version") != "2.0":
+            raise ValueError("OPML version must be 2.0")
+        namespaces = {"": namespace[1:]} if namespace else {}
+        body = root.find("body", namespaces)
+        if body is None:
+            raise ValueError("OPML body is required")
+        feeds = []
+        OPMLFeedLoader._collect(body, feeds, namespaces)
+        if not feeds:
+            raise ValueError("OPML must contain at least one feed")
+        return feeds
 
     @staticmethod
-    def _collect(parent, feeds):
-        for outline in _children(parent, "outline", parent.namespaceURI):
-            if outline.hasAttribute("xmlUrl"):
-                name, url = outline.getAttribute("text"), outline.getAttribute("xmlUrl")
+    def _collect(parent, feeds, namespaces):
+        for outline in parent.findall("outline", namespaces):
+            if "xmlUrl" in outline.attrib:
+                name, url = outline.get("text", ""), outline.get("xmlUrl")
                 if not name.strip():
                     raise ValueError("feed outline text must be a non-empty string")
                 if not url.strip():
                     raise ValueError("feed outline xmlUrl must be a non-empty string")
                 feeds.append({"name": name, "url": url})
-            OPMLFeedLoader._collect(outline, feeds)
+            OPMLFeedLoader._collect(outline, feeds, namespaces)
 
 
 class FeedError(Exception):
