@@ -2,6 +2,7 @@
 
 from contextlib import redirect_stderr
 from datetime import datetime, timezone
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -17,7 +18,7 @@ import feedparser
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from rss_fetch import FeedError, RSSFetch, load_opml
+from rss_fetch import FeedError, collect_feeds, load_opml
 
 RDF_XML = """<?xml version="1.0"?>
 <rdf:RDF
@@ -110,15 +111,15 @@ class SequentialParser:
 
 
 def collector(*responses):
-    return RSSFetch(feeds=[{"name": "Feed", "url": "https://example.com/feed"}],
+    return partial(collect_feeds, feeds=[{"name": "Feed", "url": "https://example.com/feed"}],
                     feed_parser=SequentialParser(*responses))
 
 
 def items(xml, **options):
-    result = collector(xml).collect_feeds(progress=False, **options)
-    if result.errors:
-        raise AssertionError(result.errors)
-    return result.feeds[0]["items"]
+    result = collector(xml)(progress=False, **options)
+    if result["errors"]:
+        raise AssertionError(result["errors"])
+    return result["feeds"][0]["items"]
 
 
 def rss(fields, channel='<title>Feed</title><link>https://example.com</link>'):
@@ -207,7 +208,7 @@ class LoadOPMLTest(unittest.TestCase):
                 self.load_opml(xml)
 
 
-class RSSFetchTest(unittest.TestCase):
+class CollectFeedsTest(unittest.TestCase):
     def test_parses_rss_1_rss_2_and_atom(self):
         expected = [dict(title=title, link=f'https://example.com/{title.lower()}.html',
                          published=f'2026-08-{day}T12:00:00+00:00', summary=f'Summary {index}')
@@ -239,7 +240,7 @@ class RSSFetchTest(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 feed = {'name': 'Feed', 'url': 'https://example.com'}
                 feed[key] = '\u3000\u00a0'
-                RSSFetch(feeds=[feed])
+                collect_feeds(feeds=[feed])
 
     def test_summary_length_and_unicode(self):
         for length in [999, 1000, 1001]:
@@ -329,23 +330,23 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_uses_injected_feed_parser(self):
         fetcher = SequentialParser(RSS_XML)
-        result = RSSFetch(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}],
-                          feed_parser=fetcher).collect_feeds(progress=False)
-        self.assertFalse(result.has_errors())
+        result = collect_feeds(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}],
+                               feed_parser=fetcher, progress=False)
+        self.assertFalse(result["errors"])
         self.assertEqual(['https://example.com/rss'], fetcher.urls)
-        self.assertEqual(2, len(result.feeds[0]['items']))
+        self.assertEqual(2, len(result["feeds"][0]['items']))
 
     def test_rejects_feed_parser_without_parse(self):
         with self.assertRaisesRegex(ValueError, 'feed_parser must respond to parse'):
-            RSSFetch(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}], feed_parser=object())
+            collect_feeds(feeds=[{'name': 'RSS', 'url': 'https://example.com/rss'}], feed_parser=object())
 
-    def test_rejects_invalid_constructor_arguments(self):
+    def test_rejects_invalid_feed_arguments(self):
         for feeds, message in [(None, 'feeds must be a non-empty array'), ([], 'feeds must be a non-empty array'),
                                (['invalid'], 'feeds[0] must be an object'),
                                ([{'name': ' ', 'url': 'https://example.com'}], 'feeds[0].name must be a non-empty string'),
                                ([{'name': 'RSS', 'url': None}], 'feeds[0].url must be a non-empty string')]:
             with self.subTest(feeds=feeds), self.assertRaises(ValueError) as error:
-                RSSFetch(feeds=feeds)
+                collect_feeds(feeds=feeds)
             self.assertEqual(message, str(error.exception))
 
     def test_rejects_invalid_collect_arguments(self):
@@ -353,7 +354,7 @@ class RSSFetchTest(unittest.TestCase):
                                      ('max_age_days', [-1, '1', True, 1.5], 'max_age_days must be a non-negative integer')]:
             for value in values:
                 with self.subTest(name=name, value=value), self.assertRaises(ValueError) as error:
-                    collector().collect_feeds(**{name: value}, progress=False)
+                    collector()(**{name: value}, progress=False)
                 self.assertEqual(message, str(error.exception))
 
     def test_applies_item_limit(self):
@@ -365,9 +366,9 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_collect_filters_do_not_persist_between_runs(self):
         fetch = collector(RSS_XML, RSS_XML, RSS_XML)
-        self.assertEqual(1, len(fetch.collect_feeds(item_limit=1, progress=False).feeds[0]['items']))
-        self.assertEqual(1, len(fetch.collect_feeds(max_age_days=0, now=NOW, progress=False).feeds[0]['items']))
-        self.assertEqual(2, len(fetch.collect_feeds(progress=False).feeds[0]['items']))
+        self.assertEqual(1, len(fetch(item_limit=1, progress=False)["feeds"][0]['items']))
+        self.assertEqual(1, len(fetch(max_age_days=0, now=NOW, progress=False)["feeds"][0]['items']))
+        self.assertEqual(2, len(fetch(progress=False)["feeds"][0]['items']))
 
     def test_applies_age_filter_before_item_limit(self):
         xml = rss('<item><title>Old</title><pubDate>Sat, 01 Aug 2026 12:00:00 GMT</pubDate></item>' +
@@ -376,21 +377,20 @@ class RSSFetchTest(unittest.TestCase):
 
     def test_continues_after_http_and_parse_errors(self):
         names = ['Good', 'HTTP error', 'Bad XML', 'Unsupported']
-        result = RSSFetch(feeds=[dict(name=name, url='https://example.com') for name in names],
-                          feed_parser=SequentialParser(RSS_XML, OSError('unavailable'),
-                                                         '<rss>', '<html/>')).collect_feeds(progress=False)
-        self.assertTrue(result.has_errors())
-        self.assertEqual(['Good'], [feed['name'] for feed in result.feeds])
-        self.assertEqual(names[1:], [feed['name'] for feed in result.errors])
-        self.assertTrue(result.errors[1]['error'].startswith('invalid feed: '))
-        self.assertEqual('unsupported feed format (expected RSS or Atom)', result.errors[2]['error'])
+        result = collect_feeds(feeds=[dict(name=name, url='https://example.com') for name in names],
+                               feed_parser=SequentialParser(RSS_XML, OSError('unavailable'),
+                                                            '<rss>', '<html/>'), progress=False)
+        self.assertTrue(result["errors"])
+        self.assertEqual(['Good'], [feed['name'] for feed in result["feeds"]])
+        self.assertEqual(names[1:], [feed['name'] for feed in result["errors"]])
+        self.assertTrue(result["errors"][1]['error'].startswith('invalid feed: '))
+        self.assertEqual('unsupported feed format (expected RSS or Atom)', result["errors"][2]['error'])
 
     def test_preserves_feed_and_error_output_schema(self):
-        result = RSSFetch(feeds=[dict(name='Good', url='good'), dict(name='Bad', url='bad')],
-                          feed_parser=SequentialParser(RSS_XML, OSError('unavailable'))
-                          ).collect_feeds(progress=False)
+        result = collect_feeds(feeds=[dict(name='Good', url='good'), dict(name='Bad', url='bad')],
+                               feed_parser=SequentialParser(RSS_XML, OSError('unavailable')), progress=False)
         self.assertEqual({'feeds': [dict(name='Good', url='good', items=items(RSS_XML))],
-                          'errors': [dict(name='Bad', url='bad', error='fetch error: unavailable')]}, result.to_dict())
+                          'errors': [dict(name='Bad', url='bad', error='fetch error: unavailable')]}, result)
 
     def test_missing_rss_metadata_is_accepted(self):
         for channel in ['', '<title>Feed</title>', '<link>https://example.com</link>']:
@@ -399,19 +399,19 @@ class RSSFetchTest(unittest.TestCase):
                                  items(rss('<item>' + DATE + '</item>', channel)))
 
     def test_rejects_malformed_feed_even_with_recoverable_entries(self):
-        result = collector(RSS_XML.replace('</channel>', '')).collect_feeds(progress=False)
-        self.assertEqual([], result.feeds)
-        self.assertEqual(1, len(result.errors))
-        self.assertTrue(result.errors[0]['error'].startswith('invalid feed: '))
+        result = collector(RSS_XML.replace('</channel>', ''))(progress=False)
+        self.assertEqual([], result["feeds"])
+        self.assertEqual(1, len(result["errors"]))
+        self.assertTrue(result["errors"][0]['error'].startswith('invalid feed: '))
 
     def test_does_not_convert_unexpected_fetcher_errors(self):
         with self.assertRaisesRegex(RuntimeError, 'implementation error'):
-            collector(RuntimeError('implementation error')).collect_feeds(progress=False)
+            collector(RuntimeError('implementation error'))(progress=False)
 
     def test_progress_is_written_only_to_stderr(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            collector(RSS_XML).collect_feeds()
+            collector(RSS_XML)()
         self.assertEqual('Fetching: Feed\n', stderr.getvalue())
 
 
@@ -539,10 +539,10 @@ class CLITest(unittest.TestCase):
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1', 0))
             url = f'http://127.0.0.1:{reserved.getsockname()[1]}/feed'
-            result = RSSFetch(feeds=[dict(name='Unavailable', url=url)]).collect_feeds(progress=False)
-        self.assertEqual([], result.feeds)
-        self.assertEqual(1, len(result.errors))
-        self.assertTrue(result.errors[0]['error'].startswith('fetch error: '))
+            result = collect_feeds(feeds=[dict(name='Unavailable', url=url)], progress=False)
+        self.assertEqual([], result["feeds"])
+        self.assertEqual(1, len(result["errors"]))
+        self.assertTrue(result["errors"][0]['error'].startswith('fetch error: '))
 
     def test_http_error_with_valid_feed_body_is_not_success(self):
         with tempfile.TemporaryDirectory() as directory:
