@@ -24,39 +24,37 @@ import feedparser
 UTC = timezone.utc
 
 
-class OPMLFeedLoader:
-    @staticmethod
-    def load(path):
-        try:
-            root = ElementTree.fromstring(Path(path).read_text(encoding="utf-8"))
-        except ElementTree.ParseError as error:
-            raise ValueError(f"invalid XML: {error}") from error
-        namespace, _, name = root.tag.rpartition("}")
-        if name != "opml":
-            raise ValueError("document root must be opml")
-        if root.get("version") != "2.0":
-            raise ValueError("OPML version must be 2.0")
-        namespaces = {"": namespace[1:]} if namespace else {}
-        body = root.find("body", namespaces)
-        if body is None:
-            raise ValueError("OPML body is required")
-        feeds = []
-        OPMLFeedLoader._collect(body, feeds, namespaces)
-        if not feeds:
-            raise ValueError("OPML must contain at least one feed")
-        return feeds
+def load_opml(path):
+    try:
+        root = ElementTree.fromstring(Path(path).read_text(encoding="utf-8"))
+    except ElementTree.ParseError as error:
+        raise ValueError(f"invalid XML: {error}") from error
+    namespace, _, name = root.tag.rpartition("}")
+    if name != "opml":
+        raise ValueError("document root must be opml")
+    if root.get("version") != "2.0":
+        raise ValueError("OPML version must be 2.0")
+    namespaces = {"": namespace[1:]} if namespace else {}
+    body = root.find("body", namespaces)
+    if body is None:
+        raise ValueError("OPML body is required")
+    feeds = []
+    _collect_feeds(body, feeds, namespaces)
+    if not feeds:
+        raise ValueError("OPML must contain at least one feed")
+    return feeds
 
-    @staticmethod
-    def _collect(parent, feeds, namespaces):
-        for outline in parent.findall("outline", namespaces):
-            if "xmlUrl" in outline.attrib:
-                name, url = outline.get("text", ""), outline.get("xmlUrl")
-                if not name.strip():
-                    raise ValueError("feed outline text must be a non-empty string")
-                if not url.strip():
-                    raise ValueError("feed outline xmlUrl must be a non-empty string")
-                feeds.append({"name": name, "url": url})
-            OPMLFeedLoader._collect(outline, feeds, namespaces)
+
+def _collect_feeds(parent, feeds, namespaces):
+    for outline in parent.findall("outline", namespaces):
+        if "xmlUrl" in outline.attrib:
+            name, url = outline.get("text", ""), outline.get("xmlUrl")
+            if not name.strip():
+                raise ValueError("feed outline text must be a non-empty string")
+            if not url.strip():
+                raise ValueError("feed outline xmlUrl must be a non-empty string")
+            feeds.append({"name": name, "url": url})
+        _collect_feeds(outline, feeds, namespaces)
 
 
 class FeedError(Exception):
@@ -201,7 +199,7 @@ def main(arguments=None):
         return 2
     config_path = paths[0]
     try:
-        feeds = OPMLFeedLoader.load(config_path)
+        feeds = load_opml(config_path)
         rss_fetch = RSSFetch(feeds=feeds)
     except (ValueError, OSError, UnicodeError) as error:
         print(f"Configuration error: {error}", file=sys.stderr)

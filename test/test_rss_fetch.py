@@ -17,7 +17,7 @@ import feedparser
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from rss_fetch import FeedError, OPMLFeedLoader, RSSFetch
+from rss_fetch import FeedError, RSSFetch, load_opml
 
 RDF_XML = """<?xml version="1.0"?>
 <rdf:RDF
@@ -136,12 +136,12 @@ ATOM_DATE = '<updated>2026-08-10T12:00:00Z</updated>'
 NOW = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
 
 
-class OPMLFeedLoaderTest(unittest.TestCase):
+class LoadOPMLTest(unittest.TestCase):
     def load_opml(self, xml):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'feeds.opml'
             path.write_text(xml, encoding='utf-8')
-            return OPMLFeedLoader.load(path)
+            return load_opml(path)
 
     def test_loads_flat_opml_with_xml_escaping(self):
         xml = '''<?xml version="1.0" encoding="UTF-8"?>
