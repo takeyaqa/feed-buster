@@ -33,11 +33,6 @@ def _children(parent, name, namespace=None):
             and child.namespaceURI == namespace]
 
 
-def _strip(value):
-    # Match the original script's String#strip, including its Unicode behavior.
-    return "" if value is None else value.strip(" \t\r\n\v\f\0")
-
-
 class OPMLFeedLoader:
     @staticmethod
     def load(path):
@@ -65,9 +60,9 @@ class OPMLFeedLoader:
         for outline in _children(parent, "outline", parent.namespaceURI):
             if outline.hasAttribute("xmlUrl"):
                 name, url = outline.getAttribute("text"), outline.getAttribute("xmlUrl")
-                if not _strip(name):
+                if not name.strip():
                     raise ValueError("feed outline text must be a non-empty string")
-                if not _strip(url):
+                if not url.strip():
                     raise ValueError("feed outline xmlUrl must be a non-empty string")
                 feeds.append({"name": name, "url": url})
             OPMLFeedLoader._collect(outline, feeds)
@@ -99,7 +94,7 @@ class RSSFetch:
             if not isinstance(feed, dict):
                 raise ValueError(f"feeds[{index}] must be an object")
             for key in ("name", "url"):
-                if not isinstance(feed.get(key), str) or not _strip(feed[key]):
+                if not isinstance(feed.get(key), str) or not feed[key].strip():
                     raise ValueError(f"feeds[{index}].{key} must be a non-empty string")
         if feed_parser is None:
             feed_parser = feedparser
@@ -166,9 +161,9 @@ class RSSFetch:
         return items
 
     def _normalized_item(self, title, link, published, summary):
-        return {"title": _strip(title), "link": _strip(link),
+        return {"title": (title or "").strip(), "link": (link or "").strip(),
                 "published": published.isoformat(timespec="seconds") if published else "",
-                "summary": _strip(summary)[:self.SUMMARY_MAX_LENGTH]}
+                "summary": (summary or "").strip()[:self.SUMMARY_MAX_LENGTH]}
 
 
 HELP = """Usage: rss_fetch.py [--item-limit INTEGER] [--max-age-days INTEGER] CONFIG_PATH
