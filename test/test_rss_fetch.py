@@ -17,7 +17,7 @@ import feedparser
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from rss_fetch import FeedError, OPMLFeedLoader, RSSFetch
+from rss_fetch import FeedError, RSSFetch, load_opml
 
 RDF_XML = """<?xml version="1.0"?>
 <rdf:RDF
@@ -136,12 +136,12 @@ ATOM_DATE = '<updated>2026-08-10T12:00:00Z</updated>'
 NOW = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
 
 
-class OPMLFeedLoaderTest(unittest.TestCase):
+class LoadOPMLTest(unittest.TestCase):
     def load_opml(self, xml):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'feeds.opml'
             path.write_text(xml, encoding='utf-8')
-            return OPMLFeedLoader.load(path)
+            return load_opml(path)
 
     def test_loads_flat_opml_with_xml_escaping(self):
         xml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -166,6 +166,36 @@ class OPMLFeedLoaderTest(unittest.TestCase):
           <outline text="Child" xmlUrl="https://example.com/child" /></outline></body></opml>'''
         self.assertEqual([' Parent ', 'Child'], [feed['name'] for feed in self.load_opml(xml)])
         self.assertEqual(' https://example.com ', self.load_opml(xml)[0]['url'])
+
+    def test_loads_namespaced_opml_and_ignores_unrelated_elements(self):
+        for prefix, declaration in [('', 'xmlns="urn:opml"'), ('o:', 'xmlns:o="urn:opml"')]:
+            with self.subTest(prefix=prefix):
+                xml = f'''<{prefix}opml version="2.0" {declaration} xmlns:x="urn:other">
+                  <{prefix}body>
+                    <x:outline text="Ignored" xmlUrl="https://example.com/ignored" />
+                    <{prefix}outline text="Group">
+                      <{prefix}outline text="Feed" xmlUrl="https://example.com/feed" />
+                    </{prefix}outline>
+                  </{prefix}body>
+                </{prefix}opml>'''
+                self.assertEqual([{'name': 'Feed', 'url': 'https://example.com/feed'}],
+                                 self.load_opml(xml))
+
+    def test_body_must_be_a_direct_child(self):
+        xml = '''<opml version="2.0"><head><body>
+          <outline text="Feed" xmlUrl="https://example.com/feed" />
+        </body></head></opml>'''
+        with self.assertRaisesRegex(ValueError, 'OPML body is required'):
+            self.load_opml(xml)
+
+    def test_rejects_unicode_whitespace_only_attributes(self):
+        for attribute in ['text', 'xmlUrl']:
+            with self.subTest(attribute=attribute), self.assertRaises(ValueError):
+                attributes = {'text': 'Feed', 'xmlUrl': 'https://example.com'}
+                attributes[attribute] = '\u3000\u00a0'
+                self.load_opml('<opml version="2.0"><body><outline '
+                               f'text="{attributes["text"]}" xmlUrl="{attributes["xmlUrl"]}" '
+                               '/></body></opml>')
 
     def test_rejects_invalid_opml_configurations(self):
         for xml in ['feeds:\n- name: YAML', '<opml', '<feeds/>',
@@ -193,6 +223,23 @@ class RSSFetchTest(unittest.TestCase):
         for xml in fixtures:
             with self.subTest(xml=xml):
                 self.assertEqual(['Dated'], [item['title'] for item in items(xml)])
+
+    def test_normalizes_optional_article_text(self):
+        for value, expected in [(None, ''), ('', ''), (' \t\u3000Text\u00a0\n', 'Text')]:
+            with self.subTest(value=value):
+                entry = dict(title=value, link=value, summary=value,
+                             published_parsed=NOW.utctimetuple())
+                parsed = feedparser.FeedParserDict(bozo=False, version='rss20', entries=[entry])
+                item = items(parsed)[0]
+                for key in ['title', 'link', 'summary']:
+                    self.assertEqual(expected, item[key])
+
+    def test_rejects_unicode_whitespace_only_feed_fields(self):
+        for key in ['name', 'url']:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                feed = {'name': 'Feed', 'url': 'https://example.com'}
+                feed[key] = '\u3000\u00a0'
+                RSSFetch(feeds=[feed])
 
     def test_summary_length_and_unicode(self):
         for length in [999, 1000, 1001]:
