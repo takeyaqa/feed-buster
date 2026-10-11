@@ -10,11 +10,10 @@
 from calendar import timegm
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import getopt
+import argparse
 import http.client
 import json
 from pathlib import Path
-import re
 import sys
 from urllib.error import URLError
 from xml.etree import ElementTree
@@ -155,61 +154,32 @@ class RSSFetch:
                 "summary": (summary or "").strip()[:self.SUMMARY_MAX_LENGTH]}
 
 
-HELP = """Usage: rss_fetch.py [--item-limit INTEGER] [--max-age-days INTEGER] CONFIG_PATH
-Fetch RSS 1.0, RSS 2.0, and Atom feeds configured in OPML 2.0.
-        --item-limit INTEGER         Maximum number of articles per feed (positive integer)
-        --max-age-days INTEGER       Maximum article age in days (non-negative integer)
-    -h, --help                       Show this help"""
-
-
 def main(arguments=None):
-    arguments = sys.argv[1:] if arguments is None else arguments
-    runtime_options = {"item_limit": None, "max_age_days": None}
-    try:
-        try:
-            options, paths = getopt.gnu_getopt(arguments, "h", ["help", "item-limit=", "max-age-days="])
-        except getopt.GetoptError as error:
-            option = ("--" if len(error.opt) > 1 else "-") + error.opt
-            category = "missing argument" if "requires argument" in error.msg else "invalid option"
-            raise ValueError(f"{category}: {option}") from error
-        for option, value in options:
-            if option in ("-h", "--help"):
-                print(HELP)
-                return 0
-            # Keep OptionParser's decimal, legacy octal, hex and binary integer inputs.
-            integer_pattern = r"[+-]?(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*|[0-9](?:_?[0-9])*)"
-            if not re.fullmatch(integer_pattern, value):
-                raise ValueError(f"invalid argument: {option} {value}")
-            digits = value.lstrip("+-").replace("_", "")
-            base = 0 if digits.lower().startswith(("0x", "0b")) else (8 if digits.startswith("0") else 10)
-            try:
-                number = int(value, base)
-            except ValueError as error:
-                raise ValueError(f"invalid argument: {option} {value}") from error
-            if option == "--item-limit" and number <= 0:
-                raise ValueError("invalid argument: --item-limit --item-limit must be a positive integer")
-            if option == "--max-age-days" and number < 0:
-                raise ValueError("invalid argument: --max-age-days --max-age-days must be a non-negative integer")
-            runtime_options[option[2:].replace("-", "_")] = number
-        if len(paths) != 1:
-            raise ValueError("missing argument: CONFIG_PATH")
-    except ValueError as error:
-        print(f"Argument error: {error}", file=sys.stderr)
-        print(HELP, file=sys.stderr)
-        return 2
-    config_path = paths[0]
+    parser = argparse.ArgumentParser(
+        description="Fetch RSS 1.0, RSS 2.0, and Atom feeds configured in OPML 2.0.")
+    parser.add_argument("--item-limit", type=int, metavar="INTEGER",
+                        help="Maximum number of articles per feed (positive integer)")
+    parser.add_argument("--max-age-days", type=int, metavar="INTEGER",
+                        help="Maximum article age in days (non-negative integer)")
+    parser.add_argument("config_path", metavar="CONFIG_PATH", help="Path to the OPML feed configuration")
+    args = parser.parse_args(arguments)
+    if args.item_limit is not None and args.item_limit <= 0:
+        parser.error("--item-limit must be a positive integer")
+    if args.max_age_days is not None and args.max_age_days < 0:
+        parser.error("--max-age-days must be a non-negative integer")
+    config_path = args.config_path
     try:
         feeds = load_opml(config_path)
         rss_fetch = RSSFetch(feeds=feeds)
     except (ValueError, OSError, UnicodeError) as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
-    item_limit = runtime_options["item_limit"]
-    max_age_days = runtime_options["max_age_days"]
+    item_limit = args.item_limit
+    max_age_days = args.max_age_days
     print(f"Start: config={config_path} feeds={len(feeds)} "
           f"item_limit={item_limit if item_limit is not None else 'unlimited'} "
           f"max_age_days={max_age_days if max_age_days is not None else 'unlimited'}", file=sys.stderr)
-    result = rss_fetch.collect_feeds(**runtime_options)
+    result = rss_fetch.collect_feeds(item_limit=item_limit, max_age_days=max_age_days)
     print(f"Complete: articles={sum(len(feed['items']) for feed in result.feeds)}", file=sys.stderr)
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 1 if result.has_errors() else 0

@@ -460,7 +460,7 @@ class CLITest(unittest.TestCase):
     def test_help_and_argument_errors(self):
         help_result = self.run_cli('--help')
         self.assertEqual(0, help_result.returncode)
-        self.assertTrue(help_result.stdout.startswith('Usage: rss_fetch.py '))
+        self.assertTrue(help_result.stdout.startswith('usage: rss_fetch.py '))
         self.assertEqual('', help_result.stderr)
         for args in [(), ('--bad',), ('--item-limit',), ('--item-limit', '0', 'config'),
                      ('--item-limit', 'nope', 'config'), ('--max-age-days', '-1', 'config'), ('a', 'b')]:
@@ -468,23 +468,38 @@ class CLITest(unittest.TestCase):
                 result = self.run_cli(*args)
                 self.assertEqual(2, result.returncode)
                 self.assertEqual('', result.stdout)
-                self.assertTrue(result.stderr.startswith('Argument error: '))
-                self.assertIn(help_result.stdout, result.stderr)
+                self.assertIn('usage: rss_fetch.py ', result.stderr)
+                self.assertIn('error:', result.stderr)
 
-    def test_cli_integer_forms_and_validation_messages(self):
+    def test_cli_integer_values(self):
         with tempfile.TemporaryDirectory() as directory:
             path = self.config(directory, '/rss')
-            for value, expected in [('010', 8), ('0x10', 16), ('0b10', 2), ('1_000', 1000), ('+1', 1)]:
-                result = self.run_cli('--item-limit', value, path)
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertIn(f'item_limit={expected} ', result.stderr)
-            for value in ['08', '0o10', '1.0', ' 1 ']:
-                result = self.run_cli('--item-limit', value, path)
+            for value, expected in [('1', 1), ('010', 10), ('08', 8)]:
+                with self.subTest(value=value):
+                    result = self.run_cli('--item-limit', value, path)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertIn(f'item_limit={expected} ', result.stderr)
+            result = self.run_cli('--max-age-days', '0', path)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn('max_age_days=0', result.stderr)
+        for option in ['--item-limit', '--max-age-days']:
+            for value in ['0x10', '0b10', '0o10', '1.0', 'nope']:
+                with self.subTest(option=option, value=value):
+                    result = self.run_cli(option, value, 'config')
+                    self.assertEqual(2, result.returncode)
+                    self.assertEqual('', result.stdout)
+                    self.assertIn(option, result.stderr)
+                    self.assertIn('invalid int value', result.stderr)
+
+    def test_cli_range_errors(self):
+        for option, value, message in [('--item-limit', '0', 'positive integer'),
+                                       ('--item-limit', '-1', 'positive integer'),
+                                       ('--max-age-days', '-1', 'non-negative integer')]:
+            with self.subTest(option=option, value=value):
+                result = self.run_cli(option, value, 'config')
                 self.assertEqual(2, result.returncode)
-                self.assertTrue(result.stderr.startswith(f'Argument error: invalid argument: --item-limit {value}\n'))
-        result = self.run_cli('--item-limit', '0')
-        self.assertTrue(result.stderr.startswith(
-            'Argument error: invalid argument: --item-limit --item-limit must be a positive integer\n'))
+                self.assertEqual('', result.stdout)
+                self.assertIn(f'{option} must be a {message}', result.stderr)
 
     def test_configuration_errors(self):
         with tempfile.TemporaryDirectory() as directory:
