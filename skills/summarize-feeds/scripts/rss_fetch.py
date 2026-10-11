@@ -8,7 +8,6 @@
 """Fetch OPML-configured RSS and Atom feeds with feedparser."""
 
 from calendar import timegm
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import argparse
 import http.client
@@ -21,6 +20,7 @@ from xml.etree import ElementTree
 import feedparser
 
 UTC = timezone.utc
+SUMMARY_MAX_LENGTH = 1_000
 
 
 def load_opml(path):
@@ -60,98 +60,81 @@ class FeedError(Exception):
     pass
 
 
-@dataclass
-class Result:
-    feeds: list = field(default_factory=list)
-    errors: list = field(default_factory=list)
-
-    def has_errors(self):
-        return bool(self.errors)
-
-    def to_dict(self):
-        return {"feeds": self.feeds, "errors": self.errors}
-
-
-class RSSFetch:
-    SUMMARY_MAX_LENGTH = 1_000
-
-    def __init__(self, *, feeds, feed_parser=None):
-        if not isinstance(feeds, list) or not feeds:
-            raise ValueError("feeds must be a non-empty array")
-        for index, feed in enumerate(feeds):
-            if not isinstance(feed, dict):
-                raise ValueError(f"feeds[{index}] must be an object")
-            for key in ("name", "url"):
-                if not isinstance(feed.get(key), str) or not feed[key].strip():
-                    raise ValueError(f"feeds[{index}].{key} must be a non-empty string")
-        if feed_parser is None:
-            feed_parser = feedparser
-        if not callable(getattr(feed_parser, "parse", None)):
-            raise ValueError("feed_parser must respond to parse")
-        self._feeds = feeds
-        self._feed_parser = feed_parser
-
-    def collect_feeds(self, *, item_limit=None, max_age_days=None, now=None, progress=True):
-        if item_limit is not None and (type(item_limit) is not int or item_limit <= 0):
-            raise ValueError("item_limit must be a positive integer")
-        if max_age_days is not None and (type(max_age_days) is not int or max_age_days < 0):
-            raise ValueError("max_age_days must be a non-negative integer")
-        now = (now or datetime.now(UTC)).astimezone(UTC)
-        result = Result()
-        for feed in self._feeds:
-            if progress:
-                print(f"Fetching: {feed['name']}", file=sys.stderr)
-            try:
-                items = self._parse_feed(feed["url"])
-                if max_age_days is not None:
-                    # Subtract datetimes instead of days from now to support arbitrarily large limits.
-                    items = [item for item in items
-                             if (now - datetime.fromisoformat(item["published"])).total_seconds() <= max_age_days * 86_400]
-                if item_limit is not None:
-                    items = items[:item_limit]
-                result.feeds.append({**feed, "items": items})
-            except FeedError as error:
-                result.errors.append({**feed, "error": str(error)})
-        return result
-
-    def _parse_feed(self, url):
+def collect_feeds(feeds, *, item_limit=None, max_age_days=None, now=None, progress=True, feed_parser=None):
+    if not isinstance(feeds, list) or not feeds:
+        raise ValueError("feeds must be a non-empty array")
+    for index, feed in enumerate(feeds):
+        if not isinstance(feed, dict):
+            raise ValueError(f"feeds[{index}] must be an object")
+        for key in ("name", "url"):
+            if not isinstance(feed.get(key), str) or not feed[key].strip():
+                raise ValueError(f"feeds[{index}].{key} must be a non-empty string")
+    if feed_parser is None:
+        feed_parser = feedparser
+    if not callable(getattr(feed_parser, "parse", None)):
+        raise ValueError("feed_parser must respond to parse")
+    if item_limit is not None and (type(item_limit) is not int or item_limit <= 0):
+        raise ValueError("item_limit must be a positive integer")
+    if max_age_days is not None and (type(max_age_days) is not int or max_age_days < 0):
+        raise ValueError("max_age_days must be a non-negative integer")
+    now = (now or datetime.now(UTC)).astimezone(UTC)
+    result = {"feeds": [], "errors": []}
+    for feed in feeds:
+        if progress:
+            print(f"Fetching: {feed['name']}", file=sys.stderr)
         try:
-            parsed = self._feed_parser.parse(url)
-        except (URLError, OSError, ValueError, http.client.HTTPException) as error:
-            raise FeedError(f"fetch error: {error}") from error
-        status = parsed.get("status", 200)
-        if status >= 400:
-            reason = http.client.responses.get(status, "HTTP error")
-            raise FeedError(f"fetch error: {status} {reason}")
-        if parsed.bozo:
-            error = parsed.bozo_exception
-            if isinstance(error, (URLError, OSError, http.client.HTTPException)):
-                raise FeedError(f"fetch error: {error}") from error
-            raise FeedError(f"invalid feed: {parsed.bozo_exception}")
-        if not parsed.version.startswith(("rss", "atom")):
-            raise FeedError("unsupported feed format (expected RSS or Atom)")
-        items = []
-        for entry in parsed.entries:
-            date = entry.get("published_parsed")
-            if date is None and "updated_parsed" in entry:
-                date = entry["updated_parsed"]
-            if date is None:
-                continue
-            try:
-                published = datetime.fromtimestamp(timegm(date), UTC)
-            except (ValueError, OverflowError, OSError):
-                continue
-            summary = entry.get("summary")
-            if summary is None:
-                summary = next(iter(entry.get("content", [])), {}).get("value", "")
-            items.append(self._normalized_item(entry.get("title", ""), entry.get("link", ""),
-                                               published, summary))
-        return items
+            items = _parse_feed(feed["url"], feed_parser)
+            if max_age_days is not None:
+                # Subtract datetimes instead of days from now to support arbitrarily large limits.
+                items = [item for item in items
+                         if (now - datetime.fromisoformat(item["published"])).total_seconds() <= max_age_days * 86_400]
+            if item_limit is not None:
+                items = items[:item_limit]
+            result["feeds"].append({**feed, "items": items})
+        except FeedError as error:
+            result["errors"].append({**feed, "error": str(error)})
+    return result
 
-    def _normalized_item(self, title, link, published, summary):
-        return {"title": (title or "").strip(), "link": (link or "").strip(),
-                "published": published.isoformat(timespec="seconds") if published else "",
-                "summary": (summary or "").strip()[:self.SUMMARY_MAX_LENGTH]}
+
+def _parse_feed(url, feed_parser):
+    try:
+        parsed = feed_parser.parse(url)
+    except (URLError, OSError, ValueError, http.client.HTTPException) as error:
+        raise FeedError(f"fetch error: {error}") from error
+    status = parsed.get("status", 200)
+    if status >= 400:
+        reason = http.client.responses.get(status, "HTTP error")
+        raise FeedError(f"fetch error: {status} {reason}")
+    if parsed.bozo:
+        error = parsed.bozo_exception
+        if isinstance(error, (URLError, OSError, http.client.HTTPException)):
+            raise FeedError(f"fetch error: {error}") from error
+        raise FeedError(f"invalid feed: {parsed.bozo_exception}")
+    if not parsed.version.startswith(("rss", "atom")):
+        raise FeedError("unsupported feed format (expected RSS or Atom)")
+    items = []
+    for entry in parsed.entries:
+        date = entry.get("published_parsed")
+        if date is None and "updated_parsed" in entry:
+            date = entry["updated_parsed"]
+        if date is None:
+            continue
+        try:
+            published = datetime.fromtimestamp(timegm(date), UTC)
+        except (ValueError, OverflowError, OSError):
+            continue
+        summary = entry.get("summary")
+        if summary is None:
+            summary = next(iter(entry.get("content", [])), {}).get("value", "")
+        items.append(_normalized_item(entry.get("title", ""), entry.get("link", ""),
+                                      published, summary))
+    return items
+
+
+def _normalized_item(title, link, published, summary):
+    return {"title": (title or "").strip(), "link": (link or "").strip(),
+            "published": published.isoformat(timespec="seconds") if published else "",
+            "summary": (summary or "").strip()[:SUMMARY_MAX_LENGTH]}
 
 
 def main(arguments=None):
@@ -170,7 +153,6 @@ def main(arguments=None):
     config_path = args.config_path
     try:
         feeds = load_opml(config_path)
-        rss_fetch = RSSFetch(feeds=feeds)
     except (ValueError, OSError, UnicodeError) as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
@@ -179,10 +161,10 @@ def main(arguments=None):
     print(f"Start: config={config_path} feeds={len(feeds)} "
           f"item_limit={item_limit if item_limit is not None else 'unlimited'} "
           f"max_age_days={max_age_days if max_age_days is not None else 'unlimited'}", file=sys.stderr)
-    result = rss_fetch.collect_feeds(item_limit=item_limit, max_age_days=max_age_days)
-    print(f"Complete: articles={sum(len(feed['items']) for feed in result.feeds)}", file=sys.stderr)
-    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
-    return 1 if result.has_errors() else 0
+    result = collect_feeds(feeds, item_limit=item_limit, max_age_days=max_age_days)
+    print(f"Complete: articles={sum(len(feed['items']) for feed in result['feeds'])}", file=sys.stderr)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result["errors"] else 0
 
 
 if __name__ == "__main__":

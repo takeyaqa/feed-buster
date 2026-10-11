@@ -53,7 +53,7 @@
 ## Python Conventions
 
 - Follow PEP 8 with four-space indentation and standard Python naming.
-- Preserve the minimal public API. `RSSFetch.collect_feeds` is the intended public operation; prefix implementation helpers
+- Preserve the minimal public API. `collect_feeds` is the intended public operation; prefix implementation helpers
   with `_`.
 - Inject collaborators as objects with a `parse` method returning feedparser results. Collection tests should use deterministic fake parsers.
 - Validate inputs at the boundary and keep error messages specific. Expected feed transport and parsing failures should
