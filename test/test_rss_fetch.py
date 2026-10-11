@@ -152,6 +152,18 @@ class LoadOPMLTest(unittest.TestCase):
         self.assertEqual([{'name': '日本語 & XML', 'url': 'https://example.com/feed?first=1&second=2'}],
                          self.load_opml(xml))
 
+    def test_loads_opml_using_declared_encoding(self):
+        for encoding in ['iso-8859-1', 'utf-16']:
+            with self.subTest(encoding=encoding), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'feeds.opml'
+                xml = (f'<?xml version="1.0" encoding="{encoding}"?>'
+                       '<opml version="2.0"><body>'
+                       '<outline text="Café" xmlUrl="https://example.com/feed" />'
+                       '</body></opml>')
+                path.write_bytes(xml.encode(encoding))
+                self.assertEqual([{'name': 'Café', 'url': 'https://example.com/feed'}],
+                                 load_opml(path))
+
     def test_loads_nested_opml_in_document_order(self):
         xml = '''<opml version="2.0"><body>
           <outline text="Group"><outline text="First" xmlUrl="https://example.com/first" />
@@ -168,19 +180,24 @@ class LoadOPMLTest(unittest.TestCase):
         self.assertEqual([' Parent ', 'Child'], [feed['name'] for feed in self.load_opml(xml)])
         self.assertEqual(' https://example.com ', self.load_opml(xml)[0]['url'])
 
-    def test_loads_namespaced_opml_and_ignores_unrelated_elements(self):
+    def test_rejects_namespaced_opml(self):
         for prefix, declaration in [('', 'xmlns="urn:opml"'), ('o:', 'xmlns:o="urn:opml"')]:
             with self.subTest(prefix=prefix):
-                xml = f'''<{prefix}opml version="2.0" {declaration} xmlns:x="urn:other">
+                xml = f'''<{prefix}opml version="2.0" {declaration}>
                   <{prefix}body>
-                    <x:outline text="Ignored" xmlUrl="https://example.com/ignored" />
-                    <{prefix}outline text="Group">
-                      <{prefix}outline text="Feed" xmlUrl="https://example.com/feed" />
-                    </{prefix}outline>
+                    <{prefix}outline text="Feed" xmlUrl="https://example.com/feed" />
                   </{prefix}body>
                 </{prefix}opml>'''
-                self.assertEqual([{'name': 'Feed', 'url': 'https://example.com/feed'}],
-                                 self.load_opml(xml))
+                with self.assertRaisesRegex(ValueError, 'document root must be opml'):
+                    self.load_opml(xml)
+
+    def test_ignores_namespaced_extensions(self):
+        xml = '''<opml version="2.0" xmlns:x="urn:other"><body>
+          <x:outline text="Ignored" xmlUrl="https://example.com/ignored" />
+          <outline text="Feed" xmlUrl="https://example.com/feed" />
+        </body></opml>'''
+        self.assertEqual([{'name': 'Feed', 'url': 'https://example.com/feed'}],
+                         self.load_opml(xml))
 
     def test_body_must_be_a_direct_child(self):
         xml = '''<opml version="2.0"><head><body>

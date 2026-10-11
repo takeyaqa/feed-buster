@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 import argparse
 import http.client
 import json
-from pathlib import Path
 import sys
 from xml.etree import ElementTree
 
@@ -23,27 +22,25 @@ SUMMARY_MAX_LENGTH = 1_000
 
 def load_opml(path):
     try:
-        root = ElementTree.fromstring(Path(path).read_text(encoding="utf-8"))
+        root = ElementTree.parse(path).getroot()
     except ElementTree.ParseError as error:
         raise ValueError(f"invalid XML: {error}") from error
-    namespace, _, name = root.tag.rpartition("}")
-    if name != "opml":
+    if root.tag != "opml":
         raise ValueError("document root must be opml")
     if root.get("version") != "2.0":
         raise ValueError("OPML version must be 2.0")
-    namespaces = {"": namespace[1:]} if namespace else {}
-    body = root.find("body", namespaces)
+    body = root.find("body")
     if body is None:
         raise ValueError("OPML body is required")
     feeds = []
-    _collect_feeds(body, feeds, namespaces)
+    _collect_opml_feeds(body, feeds)
     if not feeds:
         raise ValueError("OPML must contain at least one feed")
     return feeds
 
 
-def _collect_feeds(parent, feeds, namespaces):
-    for outline in parent.findall("outline", namespaces):
+def _collect_opml_feeds(parent, feeds):
+    for outline in parent.findall("outline"):
         if "xmlUrl" in outline.attrib:
             name, url = outline.get("text", ""), outline.get("xmlUrl")
             if not name.strip():
@@ -51,7 +48,7 @@ def _collect_feeds(parent, feeds, namespaces):
             if not url.strip():
                 raise ValueError("feed outline xmlUrl must be a non-empty string")
             feeds.append({"name": name, "url": url})
-        _collect_feeds(outline, feeds, namespaces)
+        _collect_opml_feeds(outline, feeds)
 
 
 class FeedError(Exception):
