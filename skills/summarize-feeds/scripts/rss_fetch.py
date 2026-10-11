@@ -8,18 +8,16 @@
 """Fetch OPML-configured RSS and Atom feeds with feedparser."""
 
 from calendar import timegm
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 import argparse
 import http.client
 import json
 from pathlib import Path
 import sys
-from urllib.error import URLError
 from xml.etree import ElementTree
 
 import feedparser
 
-UTC = timezone.utc
 SUMMARY_MAX_LENGTH = 1_000
 
 
@@ -99,7 +97,7 @@ def collect_feeds(feeds, *, item_limit=None, max_age_days=None, now=None, progre
 def _parse_feed(url, feed_parser):
     try:
         parsed = feed_parser.parse(url)
-    except (URLError, OSError, ValueError, http.client.HTTPException) as error:
+    except (OSError, ValueError, http.client.HTTPException) as error:
         raise FeedError(f"fetch error: {error}") from error
     status = parsed.get("status", 200)
     if status >= 400:
@@ -107,7 +105,7 @@ def _parse_feed(url, feed_parser):
         raise FeedError(f"fetch error: {status} {reason}")
     if parsed.bozo:
         error = parsed.bozo_exception
-        if isinstance(error, (URLError, OSError, http.client.HTTPException)):
+        if isinstance(error, (OSError, http.client.HTTPException)):
             raise FeedError(f"fetch error: {error}") from error
         raise FeedError(f"invalid feed: {parsed.bozo_exception}")
     if not parsed.version.startswith(("rss", "atom")):
@@ -115,8 +113,8 @@ def _parse_feed(url, feed_parser):
     items = []
     for entry in parsed.entries:
         date = entry.get("published_parsed")
-        if date is None and "updated_parsed" in entry:
-            date = entry["updated_parsed"]
+        if date is None:
+            date = entry.get("updated_parsed")
         if date is None:
             continue
         try:
@@ -133,7 +131,7 @@ def _parse_feed(url, feed_parser):
 
 def _normalized_item(title, link, published, summary):
     return {"title": (title or "").strip(), "link": (link or "").strip(),
-            "published": published.isoformat(timespec="seconds") if published else "",
+            "published": published.isoformat(timespec="seconds"),
             "summary": (summary or "").strip()[:SUMMARY_MAX_LENGTH]}
 
 
@@ -153,7 +151,7 @@ def main(arguments=None):
     config_path = args.config_path
     try:
         feeds = load_opml(config_path)
-    except (ValueError, OSError, UnicodeError) as error:
+    except (ValueError, OSError) as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
     item_limit = args.item_limit
