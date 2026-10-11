@@ -124,15 +124,13 @@ def _parse_feed(url, feed_parser):
         summary = entry.get("summary")
         if summary is None:
             summary = next(iter(entry.get("content", [])), {}).get("value", "")
-        items.append(_normalized_item(entry.get("title", ""), entry.get("link", ""),
-                                      published, summary))
-    return items
-
-
-def _normalized_item(title, link, published, summary):
-    return {"title": (title or "").strip(), "link": (link or "").strip(),
+        items.append({
+            "title": (entry.get("title") or "").strip(),
+            "link": (entry.get("link") or "").strip(),
             "published": published.isoformat(timespec="seconds"),
-            "summary": (summary or "").strip()[:SUMMARY_MAX_LENGTH]}
+            "summary": (summary or "").strip()[:SUMMARY_MAX_LENGTH],
+        })
+    return items
 
 
 def main(arguments=None):
