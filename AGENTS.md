@@ -16,11 +16,10 @@
 - `skills/summarize-feeds/assets/index.yaml`: catalog of available feed configurations.
 - `skills/summarize-feeds/assets/*.feeds.opml`: OPML 2.0 feed lists.
 - `test/test_rss_fetch.py`: unittest coverage for the loader, parser, filters, error handling, and result schema.
-- `mise.toml`: the required Python version.
 
 ## Environment and Commands
 
-- Use Python 3.12 or later. `mise.toml` and the devcontainer select Python 3.12 for development.
+- Use Python 3.12 or later. the devcontainer select Python 3.12 for development.
 - The script declares feedparser through PEP 723 inline metadata. Use uv to resolve and run it.
 - Run the complete test suite:
 
@@ -37,13 +36,13 @@
 - Inspect the CLI without network access:
 
   ```sh
-  uv run --script skills/summarize-feeds/scripts/rss_fetch.py --help
+  uv run skills/summarize-feeds/scripts/rss_fetch.py --help
   ```
 
 - A live fetch requires internet access:
 
   ```sh
-  uv run --script skills/summarize-feeds/scripts/rss_fetch.py \
+  uv run skills/summarize-feeds/scripts/rss_fetch.py \
     [--item-limit INTEGER] [--max-age-days INTEGER] \
     skills/summarize-feeds/assets/example.feeds.opml
   ```
