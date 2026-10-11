@@ -78,11 +78,7 @@ def collect_feeds(feeds, *, item_limit=None, max_age_days=None, now=None, progre
         if progress:
             print(f"Fetching: {feed['name']}", file=sys.stderr)
         try:
-            items = _parse_feed(feed["url"], feed_parser)
-            if max_age_days is not None:
-                # Subtract datetimes instead of days from now to support arbitrarily large limits.
-                items = [item for item in items
-                         if (now - datetime.fromisoformat(item["published"])).total_seconds() <= max_age_days * 86_400]
+            items = _parse_feed(feed["url"], feed_parser, now=now, max_age_days=max_age_days)
             if item_limit is not None:
                 items = items[:item_limit]
             result["feeds"].append({**feed, "items": items})
@@ -91,7 +87,7 @@ def collect_feeds(feeds, *, item_limit=None, max_age_days=None, now=None, progre
     return result
 
 
-def _parse_feed(url, feed_parser):
+def _parse_feed(url, feed_parser, *, now, max_age_days):
     try:
         parsed = feed_parser.parse(url)
     except (OSError, ValueError, http.client.HTTPException) as error:
@@ -118,6 +114,10 @@ def _parse_feed(url, feed_parser):
             published = datetime.fromtimestamp(timegm(date), UTC)
         except (ValueError, OverflowError, OSError):
             continue
+        if max_age_days is not None:
+            # Compare elapsed seconds to avoid overflowing a datetime cutoff for large limits.
+            if (now - published).total_seconds() > max_age_days * 86_400:
+                continue
         summary = entry.get("summary")
         if summary is None:
             summary = next(iter(entry.get("content", [])), {}).get("value", "")
