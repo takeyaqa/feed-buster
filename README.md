@@ -1,13 +1,10 @@
 # feed-buster
 
-The `summarize-feeds` Agent Skill fetches RSS 1.0, RSS 2.0, and Atom feeds as category-grouped JSON.
+The `summarize-feeds` Agent Skill fetches RSS 1.0, RSS 2.0, and Atom feeds as JSON.
 Choose the display format, language, and summary detail at invocation time.
-
-Requires Python 3.12+, uv, and internet access. uv installs feedparser automatically.
+Requires Python 3.12+, uv, and internet access; uv installs feedparser automatically.
 
 ## Installation
-
-Use either command:
 
 ```sh
 gh skill install takeyaqa/feed-buster
@@ -19,48 +16,44 @@ npx skills add takeyaqa/feed-buster
 
 ```text
 Fetch all categories and show Japanese highlights and all articles grouped by category.
-Fetch Example with up to 5 articles per feed from the last 3 days and return raw JSON.
+Fetch News with up to 5 articles per feed from the last 3 days and return raw JSON.
 Fetch all categories and prepare a three-minute Japanese narration.
 ```
 
-Display instructions can also be included in scheduled tasks. Without them, the skill reports counts per category.
-Interactive UI and audio depend on the host; a narration script does not start playback.
+Without display instructions, the skill reports counts per category. Interactive UI and audio depend on the host.
 
-## Feed Configuration
+## Configuration
 
-Add an OPML 2.0 file to `skills/summarize-feeds/assets/`:
+Manage all feeds in `skills/summarize-feeds/assets/feeds.opml`; no YAML catalog is needed.
+Add a `category` attribute to each feed outline:
 
 ```xml
 <opml version="2.0">
   <body>
-    <outline text="Example" xmlUrl="https://example.com/feed.xml" />
+    <outline text="News source" category="News" xmlUrl="https://example.com/news.xml" />
+    <outline text="Security source" category="Security" xmlUrl="https://example.com/security.xml" />
   </body>
 </opml>
 ```
 
-At least one feed with non-empty `text` and `xmlUrl` is required. Nested outlines are supported.
-Register the file in `assets/index.yaml`; each catalog entry is a category:
-
-```yaml
-configs:
-  - name: Example
-    file: example.feeds.opml
-    description: Example feeds.
-```
+At least one feed with non-empty `text` and `xmlUrl` is required. Categories are trimmed literal labels;
+missing means uncategorized, while blank values are invalid. Nested outlines are supported without category inheritance.
+To migrate, copy feed outlines from the old OPML files into this file and assign their former catalog names as categories.
 
 ## CLI and Output
 
 ```sh
-uv run skills/summarize-feeds/scripts/rss_fetch.py --category "Example" \
-  --item-limit 5 --max-age-days 3 skills/summarize-feeds/assets/example.feeds.opml
+uv run skills/summarize-feeds/scripts/rss_fetch.py \
+  --category "News" --category "Security" --item-limit 5 --max-age-days 3 \
+  skills/summarize-feeds/assets/feeds.opml
 ```
 
-`--category` returns `{"categories": [{"name": "Example", "config": "...", "feeds": [...], "errors": [...]}]}`.
-Omitting it preserves the legacy `{"feeds": [...], "errors": [...]}` format. The skill runs once per selected
-configuration and combines categories; the script does not read the YAML catalog.
+Omit `--category` to fetch all feeds, including uncategorized ones. Repeat it to select multiple exact labels.
+Unknown categories fail before fetching. Selection preserves OPML order and does not duplicate feeds for repeated filters.
 
-- Feed: `name`, `url`, `items`. Article: `title`, `link`, `published`, `summary`.
-- Error: `name`, `url`, `error`. Failed and empty categories are retained.
+Output always has `feeds` and `errors` arrays. Each entry retains its `name`, `url`, and optional `category`, plus
+`items` for success or `error` for failure. Articles contain `title`, `link`, `published`, and `summary`.
+
 - Dates are UTC ISO 8601, with updated dates as fallback; undated articles are excluded.
 - Excerpts may contain HTML and are limited to 1,000 characters. They are not AI summaries.
 - Order and duplicates are preserved. Age filtering precedes the item limit; articles are not sorted.

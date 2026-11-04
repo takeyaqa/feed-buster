@@ -13,8 +13,7 @@
 - `skills/summarize-feeds/SKILL.md`: agent-facing workflow and output contract.
 - `skills/summarize-feeds/scripts/rss_fetch.py`: OPML loading, feed fetching and parsing, filtering, JSON output, and CLI
   handling.
-- `skills/summarize-feeds/assets/index.yaml`: catalog of available feed configurations.
-- `skills/summarize-feeds/assets/*.feeds.opml`: OPML 2.0 feed lists.
+- `skills/summarize-feeds/assets/feeds.opml`: single OPML 2.0 feed list with per-feed categories.
 - `test/test_rss_fetch.py`: unittest coverage for the loader, parser, filters, error handling, and result schema.
 
 ## Environment and Commands
@@ -44,7 +43,7 @@
   ```sh
   uv run skills/summarize-feeds/scripts/rss_fetch.py \
     [--item-limit INTEGER] [--max-age-days INTEGER] \
-    skills/summarize-feeds/assets/example.feeds.opml
+    skills/summarize-feeds/assets/feeds.opml
   ```
 
   Do not save fetched JSON or generated summaries in the repository unless explicitly requested.

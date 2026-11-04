@@ -1,4 +1,0 @@
-configs:
-- name: Example
-  file: example.feeds.opml
-  description: Example feeds.
