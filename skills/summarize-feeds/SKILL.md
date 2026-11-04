@@ -11,8 +11,9 @@ Provide validated JSON; invocation-time instructions determine the final format,
 ## Fetch
 
 1. Locate `scripts/rss_fetch.py` and `assets/feeds.opml` relative to this skill. Stop if either is missing.
-2. Use each feed outline's `category` attribute to resolve requested categories. If ambiguous, show available names and ask.
-   Omit the filter for all feeds; otherwise pass exact names with repeated `--category` options.
+2. By default, omit `--category` and fetch all feeds, including uncategorized ones; do not ask the user to select categories.
+   Filter only when the user or scheduled task explicitly requests categories. Resolve names from outline `category`
+   attributes and pass exact names with repeated `--category` options. Ask only if an explicit selection is ambiguous.
 3. Run with absolute paths and safely quoted arguments:
 
    ```sh

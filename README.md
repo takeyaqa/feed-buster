@@ -14,8 +14,10 @@ npx skills add takeyaqa/feed-buster
 
 ## Usage
 
+Requests without an explicit category fetch all feeds, including uncategorized ones. Category filters are opt-in.
+
 ```text
-Fetch all categories and show Japanese highlights and all articles grouped by category.
+Fetch feeds and show Japanese highlights and all articles grouped by category.
 Fetch News with up to 5 articles per feed from the last 3 days and return raw JSON.
 Fetch all categories and prepare a three-minute Japanese narration.
 ```
