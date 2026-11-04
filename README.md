@@ -1,118 +1,65 @@
 # feed-buster
 
-`feed-buster` contains the `summarize-feeds` Agent Skill.
-
-It fetches configured RSS 1.0, RSS 2.0, and Atom feeds and presents highlights and a complete article list in the
-user's language.
-
-It collects recent articles from multiple feeds and creates a digest in the language specified by the user or used
-primarily in the conversation.
-
-## Features
-
-- Selects the feed configuration that best matches the request
-- Fetches articles from multiple feeds in a single run
-- Supports RSS 1.0, RSS 2.0, and Atom feeds with XML namespaces
-- Normalizes publication dates and displays the newest articles first
-- Excludes articles that do not provide a publication date
-- Summarizes the results in the user's language, organized as highlights, an article list, and fetch errors
-- Continues processing successfully fetched articles even when some feeds fail
-
-## Requirements
-
-- Python 3.12 or later and uv (feedparser is installed automatically from PEP 723 script metadata)
-- Internet access to fetch feeds
-
-URL fetching and RSS/Atom parsing use `feedparser.parse(URL)`, including date recognition and HTML normalization.
-The script does not set a request timeout.
-OPML configuration loading uses the Python standard library. Malformed feeds are reported in `errors`.
+The `fetch-feeds` Agent Skill fetches RSS 1.0, RSS 2.0, and Atom feeds as JSON.
+Choose the display format, language, and summary detail at invocation time.
+Requires Python 3.12+, uv, and internet access; uv installs feedparser automatically.
 
 ## Installation
 
-### Using GitHub CLI
-
-Run the following command and follow the prompts to select a skill and target agent:
-
-```bash
+```sh
 gh skill install takeyaqa/feed-buster
-```
-
-See the [`gh skill install` documentation](https://cli.github.com/manual/gh_skill_install) for options such as `--agent`, `--scope`, and `--all`.
-
-### Using npx
-
-```bash
+# or
 npx skills add takeyaqa/feed-buster
 ```
 
 ## Usage
 
-After installation, ask your AI agent to summarize the latest articles from your configured feeds.
+Requests without an explicit category fetch all feeds, including uncategorized ones. Category filters are opt-in.
 
 ```text
-Summarize the latest articles from the configured feeds.
+Fetch feeds and show Japanese highlights and all articles grouped by category.
+Fetch News with up to 5 articles per feed from the last 3 days and return raw JSON.
+Fetch all categories and prepare a three-minute Japanese narration.
 ```
 
-You can also specify a configuration by name.
+Without display instructions, the skill reports counts per category. Interactive UI and audio depend on the host.
 
-```text
-Use Sample to fetch articles and create a digest.
-```
+## Configuration
 
-You can specify `item_limit` and `max_age_days` in natural language to limit the number of articles per feed and how far
-back to fetch them.
-
-```text
-Use Sample to fetch up to 5 articles per feed from the last 3 days.
-```
-
-## Adding a Feed Configuration
-
-Add feed configurations as OPML 2.0 files in the installed skill's `assets` directory. Then register them in the `configs`
-array in the YAML catalog at `assets/index.yaml`.
-
-The following is an example configuration file:
+Manage all feeds in `skills/fetch-feeds/assets/feeds.opml`; no YAML catalog is needed.
+Add a `category` attribute to each feed outline:
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
 <opml version="2.0">
-  <head>
-    <title>Example</title>
-  </head>
   <body>
-    <outline
-      type="rss"
-      text="Example"
-      title="Example"
-      xmlUrl="https://example.com/feed.xml"
-      htmlUrl="https://example.com/" />
+    <outline text="News source" category="News" xmlUrl="https://example.com/news.xml" />
+    <outline text="Security source" category="Security" xmlUrl="https://example.com/security.xml" />
   </body>
 </opml>
 ```
 
-- The document must use OPML 2.0 and contain at least one feed `outline` in `body`.
-- Each feed requires non-empty `text` and `xmlUrl` attributes. Nested group outlines are supported.
+At least one feed with non-empty `text` and `xmlUrl` is required. Categories are trimmed literal labels;
+missing means uncategorized, while blank values are invalid. Nested outlines are supported without category inheritance.
+To migrate, copy feed outlines from the old OPML files into this file and assign their former catalog names as categories.
 
-The following example registers the configuration in `assets/index.yaml`:
+## CLI and Output
 
-```yaml
-configs:
-  - name: Example
-    file: example.feeds.opml
-    description: Example feeds.
+```sh
+uv run skills/fetch-feeds/scripts/rss_fetch.py \
+  --category "News" --category "Security" --item-limit 5 --max-age-days 3 \
+  skills/fetch-feeds/assets/feeds.opml
 ```
 
-## Output
+Omit `--category` to fetch all feeds, including uncategorized ones. Repeat it to select multiple exact labels.
+Unknown categories fail before fetching. Selection preserves OPML order and does not duplicate feeds for repeated filters.
 
-The Skill produces a digest in the following format. For headings and standard text, it first uses the language specified
-by the user, then the language used primarily in the current conversation. If the conversation language cannot be determined,
-it uses English.
+Output always has `feeds` and `errors` arrays. Each entry retains its `name`, `url`, and optional `category`, plus
+`items` for success or `error` for failure. Articles contain `title`, `link`, `published`, and `summary`.
 
-1. Number of successful feeds, articles, and errors
-2. Highlights
-3. Article list
-4. Fetch errors (only when errors occur)
+- Dates are UTC ISO 8601, with updated dates as fallback; undated articles are excluded.
+- Excerpts may contain HTML and are limited to 1,000 characters. They are not AI summaries.
+- Order and duplicates are preserved. Age filtering precedes the item limit; articles are not sorted.
+- Stdout is JSON; stderr contains progress and diagnostics. Exit codes: `0` success, `1` feed failures with JSON,
+  `2` invalid arguments or configuration without JSON. The script sets no request timeout.
 
-Article titles and proper nouns are preserved in their original form, while descriptions are written in the selected language.
-If an article summary is unavailable, the Skill does not infer its contents from the title. The language of the source or
-article does not change the digest language.
+See [SKILL.md](skills/fetch-feeds/SKILL.md) for validation and presentation rules.

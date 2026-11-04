@@ -46,7 +46,13 @@ def _collect_opml_feeds(parent, feeds):
                 raise ValueError("feed outline text must be a non-empty string")
             if not url.strip():
                 raise ValueError("feed outline xmlUrl must be a non-empty string")
-            feeds.append({"name": name, "url": url})
+            feed = {"name": name, "url": url}
+            if "category" in outline.attrib:
+                category = outline.get("category").strip()
+                if not category:
+                    raise ValueError("feed outline category must be a non-empty string")
+                feed["category"] = category
+            feeds.append(feed)
         _collect_opml_feeds(outline, feeds)
 
 
@@ -63,6 +69,9 @@ def collect_feeds(feeds, *, item_limit=None, max_age_days=None, now=None, progre
         for key in ("name", "url"):
             if not isinstance(feed.get(key), str) or not feed[key].strip():
                 raise ValueError(f"feeds[{index}].{key} must be a non-empty string")
+        if "category" in feed and (
+                not isinstance(feed["category"], str) or not feed["category"].strip()):
+            raise ValueError(f"feeds[{index}].category must be a non-empty string")
     if feed_parser is None:
         feed_parser = feedparser
     if not callable(getattr(feed_parser, "parse", None)):
@@ -136,8 +145,12 @@ def main(arguments=None):
                         help="Maximum number of articles per feed (positive integer)")
     parser.add_argument("--max-age-days", type=int, metavar="INTEGER",
                         help="Maximum article age in days (non-negative integer)")
+    parser.add_argument("--category", action="append", metavar="NAME",
+                        help="Fetch only this exact category; repeat to select several (default: all)")
     parser.add_argument("config_path", metavar="CONFIG_PATH", help="Path to the OPML feed configuration")
     args = parser.parse_args(arguments)
+    if args.category is not None and any(not name.strip() for name in args.category):
+        parser.error("--category must be a non-empty string")
     if args.item_limit is not None and args.item_limit <= 0:
         parser.error("--item-limit must be a positive integer")
     if args.max_age_days is not None and args.max_age_days < 0:
@@ -145,6 +158,13 @@ def main(arguments=None):
     config_path = args.config_path
     try:
         feeds = load_opml(config_path)
+        if args.category:
+            selected = {name.strip() for name in args.category}
+            available = {feed.get("category") for feed in feeds}
+            unknown = selected - available
+            if unknown:
+                raise ValueError(f"unknown categories: {', '.join(sorted(unknown))}")
+            feeds = [feed for feed in feeds if feed.get("category") in selected]
     except (ValueError, OSError) as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return 2
@@ -155,8 +175,9 @@ def main(arguments=None):
           f"max_age_days={max_age_days if max_age_days is not None else 'unlimited'}", file=sys.stderr)
     result = collect_feeds(feeds, item_limit=item_limit, max_age_days=max_age_days)
     print(f"Complete: articles={sum(len(feed['items']) for feed in result['feeds'])}", file=sys.stderr)
+    exit_code = 1 if result["errors"] else 0
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 1 if result["errors"] else 0
+    return exit_code
 
 
 if __name__ == "__main__":

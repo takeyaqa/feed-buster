@@ -3,18 +3,17 @@
 ## Scope and Sources of Truth
 
 - These instructions apply to the entire repository.
-- Treat the checked-in files as authoritative. Keep `README.md`, `skills/summarize-feeds/SKILL.md`, the Python implementation,
+- Treat the checked-in files as authoritative. Keep `README.md`, `skills/fetch-feeds/SKILL.md`, the Python implementation,
   tests, and feed assets consistent when a change affects their shared behavior.
 - Keep changes small and focused. Discuss new features or dependencies before introducing them; this project is primarily
   maintained by its author and generally accepts only small fixes.
 
 ## Project Layout
 
-- `skills/summarize-feeds/SKILL.md`: agent-facing workflow and output contract.
-- `skills/summarize-feeds/scripts/rss_fetch.py`: OPML loading, feed fetching and parsing, filtering, JSON output, and CLI
+- `skills/fetch-feeds/SKILL.md`: agent-facing workflow and output contract.
+- `skills/fetch-feeds/scripts/rss_fetch.py`: OPML loading, feed fetching and parsing, filtering, JSON output, and CLI
   handling.
-- `skills/summarize-feeds/assets/index.yaml`: catalog of available feed configurations.
-- `skills/summarize-feeds/assets/*.feeds.opml`: OPML 2.0 feed lists.
+- `skills/fetch-feeds/assets/feeds.opml`: single OPML 2.0 feed list with per-feed categories.
 - `test/test_rss_fetch.py`: unittest coverage for the loader, parser, filters, error handling, and result schema.
 
 ## Environment and Commands
@@ -30,21 +29,21 @@
 - Check Python syntax:
 
   ```sh
-  uv run -- python -m py_compile skills/summarize-feeds/scripts/rss_fetch.py test/test_rss_fetch.py
+  uv run -- python -m py_compile skills/fetch-feeds/scripts/rss_fetch.py test/test_rss_fetch.py
   ```
 
 - Inspect the CLI without network access:
 
   ```sh
-  uv run skills/summarize-feeds/scripts/rss_fetch.py --help
+  uv run skills/fetch-feeds/scripts/rss_fetch.py --help
   ```
 
 - A live fetch requires internet access:
 
   ```sh
-  uv run skills/summarize-feeds/scripts/rss_fetch.py \
+  uv run skills/fetch-feeds/scripts/rss_fetch.py \
     [--item-limit INTEGER] [--max-age-days INTEGER] \
-    skills/summarize-feeds/assets/example.feeds.opml
+    skills/fetch-feeds/assets/feeds.opml
   ```
 
   Do not save fetched JSON or generated summaries in the repository unless explicitly requested.

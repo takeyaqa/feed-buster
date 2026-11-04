@@ -16,7 +16,7 @@ import socket
 
 import feedparser
 
-SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "skills/fetch-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
 from rss_fetch import FeedError, collect_feeds, load_opml
 
@@ -143,6 +143,22 @@ class LoadOPMLTest(unittest.TestCase):
             path = Path(directory) / 'feeds.opml'
             path.write_text(xml, encoding='utf-8')
             return load_opml(path)
+
+    def test_categories_are_per_feed_and_trimmed(self):
+        xml = '<opml version="2.0"><body><outline category="Parent">' \
+              '<outline text="A" xmlUrl="a" category=" 技術 &amp; Science " />' \
+              '<outline text="B" xmlUrl="b" /></outline>' \
+              '<outline text="A" xmlUrl="a" category="News" /></body></opml>'
+        self.assertEqual([dict(name='A', url='a', category='技術 & Science'),
+                          dict(name='B', url='b'), dict(name='A', url='a', category='News')],
+                         self.load_opml(xml))
+
+    def test_rejects_empty_category(self):
+        for category in ['', ' ', '\u3000']:
+            with self.subTest(category=category), self.assertRaisesRegex(ValueError, 'category'):
+                self.load_opml('<opml version="2.0"><body>'
+                               f'<outline text="Feed" xmlUrl="url" category="{category}" />'
+                               '</body></opml>')
 
     def test_loads_flat_opml_with_xml_escaping(self):
         xml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -366,6 +382,12 @@ class CollectFeedsTest(unittest.TestCase):
                 collect_feeds(feeds=feeds)
             self.assertEqual(message, str(error.exception))
 
+    def test_rejects_invalid_category_without_fetching(self):
+        for category in [None, 1, '', ' ', '\u3000']:
+            with self.subTest(category=category), self.assertRaisesRegex(ValueError, 'category'):
+                collect_feeds([dict(name='Feed', url='url', category=category)],
+                              feed_parser=SequentialParser(), progress=False)
+
     def test_rejects_invalid_collect_arguments(self):
         for name, values, message in [('item_limit', [0, -1, '1', True, 1.5], 'item_limit must be a positive integer'),
                                      ('max_age_days', [-1, '1', True, 1.5], 'max_age_days must be a non-negative integer')]:
@@ -448,7 +470,7 @@ class CLITest(unittest.TestCase):
                 self.send_response(503 if self.path == "/server-error" else 200)
                 self.send_header("Content-Type", "application/xml; charset=utf-8")
                 self.end_headers()
-                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/bad': '<rss>', '/server-error': RSS_XML}.get(self.path, '<html/>').encode())
+                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/empty': rss(''), '/bad': '<rss>', '/server-error': RSS_XML}.get(self.path, '<html/>').encode())
 
             def log_message(self, *args):
                 pass
@@ -487,6 +509,77 @@ class CLITest(unittest.TestCase):
                 self.assertEqual('', result.stdout)
                 self.assertIn('usage: rss_fetch.py ', result.stderr)
                 self.assertIn('error:', result.stderr)
+
+    def categorized_config(self, directory):
+        path = Path(self.config(directory, '/rss', '/missing', '/empty', '/bad'))
+        xml = path.read_text()
+        for route, category in [('/rss', '技術 &amp; Science'), ('/missing', 'Security'),
+                                ('/empty', '技術 &amp; Science')]:
+            xml = xml.replace(f'text="{route}"', f'text="{route}" category="{category}"')
+        path.write_text(xml)
+        return str(path)
+
+    def test_category_filters_before_fetching(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.categorized_config(directory)
+            result = self.run_cli('--category', '技術 & Science', '--item-limit', '1', path)
+        self.assertEqual(0, result.returncode, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual({'feeds', 'errors'}, set(data))
+        self.assertEqual(['/rss', '/empty'], [feed['name'] for feed in data['feeds']])
+        self.assertEqual(['技術 & Science'] * 2, [feed['category'] for feed in data['feeds']])
+        self.assertEqual([1, 0], [len(feed['items']) for feed in data['feeds']])
+        self.assertEqual([], data['errors'])
+        self.assertNotIn('Fetching: /missing', result.stderr)
+        self.assertNotIn('Fetching: /bad', result.stderr)
+
+    def test_multiple_categories_preserve_opml_order_and_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.categorized_config(directory)
+            result = self.run_cli('--category', 'Security', '--category', '技術 & Science',
+                                  '--category', 'Security', path)
+        self.assertEqual(1, result.returncode, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual(['/rss', '/empty'], [feed['name'] for feed in data['feeds']])
+        self.assertEqual([dict(name='/missing', url=self.url + '/missing', category='Security',
+                              error='fetch error: 404 Not Found')], data['errors'])
+        self.assertLess(result.stderr.index('Fetching: /rss'), result.stderr.index('Fetching: /missing'))
+
+    def test_all_categories_include_uncategorized_and_total_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.categorized_config(directory)
+            result = self.run_cli(path)
+            failed = self.run_cli('--category', 'Security', path)
+        self.assertEqual(1, result.returncode)
+        data = json.loads(result.stdout)
+        self.assertEqual(2, len(data['feeds']))
+        self.assertEqual(2, len(data['errors']))
+        self.assertNotIn('category', data['errors'][1])
+        self.assertEqual(1, failed.returncode)
+        self.assertEqual([], json.loads(failed.stdout)['feeds'])
+        self.assertEqual('Security', json.loads(failed.stdout)['errors'][0]['category'])
+
+    def test_unknown_category_stops_before_any_fetch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.categorized_config(directory)
+            result = self.run_cli('--category', 'Security', '--category', 'Unknown', path)
+        self.assertEqual(2, result.returncode)
+        self.assertEqual('', result.stdout)
+        self.assertIn('unknown categories: Unknown', result.stderr)
+        self.assertNotIn('Fetching:', result.stderr)
+
+    def test_category_validation_and_configuration_failure(self):
+        for name in ['', ' ', '\u3000']:
+            with self.subTest(name=name):
+                result = self.run_cli('--category', name, 'missing.opml')
+                self.assertEqual(2, result.returncode)
+                self.assertEqual('', result.stdout)
+                self.assertIn('--category must be a non-empty string', result.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_cli('--category', 'Example', str(Path(directory) / 'missing.opml'))
+        self.assertEqual(2, result.returncode)
+        self.assertEqual('', result.stdout)
+        self.assertIn('Configuration error:', result.stderr)
 
     def test_cli_integer_values(self):
         with tempfile.TemporaryDirectory() as directory:
