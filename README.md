@@ -1,6 +1,6 @@
 # feed-buster
 
-The `summarize-feeds` Agent Skill fetches RSS 1.0, RSS 2.0, and Atom feeds as JSON.
+The `fetch-feeds` Agent Skill fetches RSS 1.0, RSS 2.0, and Atom feeds as JSON.
 Choose the display format, language, and summary detail at invocation time.
 Requires Python 3.12+, uv, and internet access; uv installs feedparser automatically.
 
@@ -26,7 +26,7 @@ Without display instructions, the skill reports counts per category. Interactive
 
 ## Configuration
 
-Manage all feeds in `skills/summarize-feeds/assets/feeds.opml`; no YAML catalog is needed.
+Manage all feeds in `skills/fetch-feeds/assets/feeds.opml`; no YAML catalog is needed.
 Add a `category` attribute to each feed outline:
 
 ```xml
@@ -45,9 +45,9 @@ To migrate, copy feed outlines from the old OPML files into this file and assign
 ## CLI and Output
 
 ```sh
-uv run skills/summarize-feeds/scripts/rss_fetch.py \
+uv run skills/fetch-feeds/scripts/rss_fetch.py \
   --category "News" --category "Security" --item-limit 5 --max-age-days 3 \
-  skills/summarize-feeds/assets/feeds.opml
+  skills/fetch-feeds/assets/feeds.opml
 ```
 
 Omit `--category` to fetch all feeds, including uncategorized ones. Repeat it to select multiple exact labels.
@@ -62,4 +62,4 @@ Output always has `feeds` and `errors` arrays. Each entry retains its `name`, `u
 - Stdout is JSON; stderr contains progress and diagnostics. Exit codes: `0` success, `1` feed failures with JSON,
   `2` invalid arguments or configuration without JSON. The script sets no request timeout.
 
-See [SKILL.md](skills/summarize-feeds/SKILL.md) for validation and presentation rules.
+See [SKILL.md](skills/fetch-feeds/SKILL.md) for validation and presentation rules.

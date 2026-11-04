@@ -1,5 +1,5 @@
 ---
-name: summarize-feeds
+name: fetch-feeds
 description: Fetch RSS/Atom feeds from a single OPML file, optionally filtered by category, as validated JSON for the requested presentation. Use for configured feeds and RSS digests, not general web research or article full-text retrieval.
 compatibility: Requires uv, Python 3.12 or later, and internet access.
 ---

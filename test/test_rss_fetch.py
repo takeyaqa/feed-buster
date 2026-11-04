@@ -16,7 +16,7 @@ import socket
 
 import feedparser
 
-SCRIPT = Path(__file__).resolve().parents[1] / "skills/summarize-feeds/scripts/rss_fetch.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "skills/fetch-feeds/scripts/rss_fetch.py"
 sys.path.insert(0, str(SCRIPT.parent))
 from rss_fetch import FeedError, collect_feeds, load_opml
 
