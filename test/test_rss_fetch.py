@@ -448,7 +448,7 @@ class CLITest(unittest.TestCase):
                 self.send_response(503 if self.path == "/server-error" else 200)
                 self.send_header("Content-Type", "application/xml; charset=utf-8")
                 self.end_headers()
-                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/bad': '<rss>', '/server-error': RSS_XML}.get(self.path, '<html/>').encode())
+                self.wfile.write({'/rss': RSS_XML, '/atom': ATOM_XML, '/empty': rss(''), '/bad': '<rss>', '/server-error': RSS_XML}.get(self.path, '<html/>').encode())
 
             def log_message(self, *args):
                 pass
@@ -487,6 +487,41 @@ class CLITest(unittest.TestCase):
                 self.assertEqual('', result.stdout)
                 self.assertIn('usage: rss_fetch.py ', result.stderr)
                 self.assertIn('error:', result.stderr)
+
+    def test_category_envelope_preserves_results_and_exit_codes(self):
+        cases = [(('/rss',), 0), (('/rss', '/missing'), 1), (('/missing',), 1)]
+        with tempfile.TemporaryDirectory() as directory:
+            for routes, status in cases:
+                with self.subTest(routes=routes):
+                    path = self.config(directory, *routes)
+                    legacy = self.run_cli('--item-limit', '1', path)
+                    result = self.run_cli('--category', '技術 & Science', '--item-limit', '1', path)
+                    self.assertEqual(status, result.returncode, result.stderr)
+                    self.assertEqual({'categories': [dict(name='技術 & Science', config=path,
+                                                         **json.loads(legacy.stdout))]},
+                                     json.loads(result.stdout))
+
+    def test_category_retains_successful_empty_feeds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.config(directory, '/empty')
+            result = self.run_cli('--category', 'Empty', path)
+        self.assertEqual(0, result.returncode, result.stderr)
+        category = json.loads(result.stdout)['categories'][0]
+        self.assertEqual([], category['feeds'][0]['items'])
+        self.assertEqual([], category['errors'])
+
+    def test_category_validation_and_configuration_failure(self):
+        for name in ['', ' ', '\u3000']:
+            with self.subTest(name=name):
+                result = self.run_cli('--category', name, 'missing.opml')
+                self.assertEqual(2, result.returncode)
+                self.assertEqual('', result.stdout)
+                self.assertIn('--category must be a non-empty string', result.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_cli('--category', 'Example', str(Path(directory) / 'missing.opml'))
+        self.assertEqual(2, result.returncode)
+        self.assertEqual('', result.stdout)
+        self.assertIn('Configuration error:', result.stderr)
 
     def test_cli_integer_values(self):
         with tempfile.TemporaryDirectory() as directory:

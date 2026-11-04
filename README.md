@@ -2,20 +2,17 @@
 
 `feed-buster` contains the `summarize-feeds` Agent Skill.
 
-It fetches configured RSS 1.0, RSS 2.0, and Atom feeds and presents highlights and a complete article list in the
-user's language.
-
-It collects recent articles from multiple feeds and creates a digest in the language specified by the user or used
-primarily in the conversation.
+It fetches configured RSS 1.0, RSS 2.0, and Atom feeds and provides validated JSON grouped by category.
+Choose the presentation, language, and summary detail each time you invoke the skill or configure a scheduled task.
 
 ## Features
 
-- Selects the feed configuration that best matches the request
+- Selects one, multiple, or all feed configurations matching the request
 - Fetches articles from multiple feeds in a single run
 - Supports RSS 1.0, RSS 2.0, and Atom feeds with XML namespaces
-- Normalizes publication dates and displays the newest articles first
+- Normalizes dates to UTC while preserving feed order and duplicate articles
 - Excludes articles that do not provide a publication date
-- Summarizes the results in the user's language, organized as highlights, an article list, and fetch errors
+- Separates retrieval from presentation: request raw JSON, a digest, an interactive view, or a spoken-style script
 - Continues processing successfully fetched articles even when some feeds fail
 
 ## Requirements
@@ -102,17 +99,46 @@ configs:
     description: Example feeds.
 ```
 
-## Output
+## Output and Presentation
 
-The Skill produces a digest in the following format. For headings and standard text, it first uses the language specified
-by the user, then the language used primarily in the current conversation. If the conversation language cannot be determined,
-it uses English.
+The skill runs the script once per selected category and combines the validated category objects into a single
+`{"categories": [...]}` result. Each category contains `name` (the catalog name), `config` (the OPML path), `feeds`, and
+`errors`. Category order follows the request, or the catalog when all categories are requested. Empty and failed categories
+remain in the result. Nested OPML groups are containers, not separate output categories.
 
-1. Number of successful feeds, articles, and errors
-2. Highlights
-3. Article list
-4. Fetch errors (only when errors occur)
+Successful feeds contain `name`, `url`, and `items`; errors contain `name`, `url`, and `error`.
+Each article has `title`, `link`, `published` (UTC ISO 8601), and `summary`. The summary is the feed-provided excerpt,
+possibly HTML, truncated to 1,000 characters, not an AI-generated summary. Missing publication dates fall back to updated
+dates; articles without either usable date are excluded. Feed order and duplicates are preserved. Age filtering precedes
+the item limit, which selects the first matching entries in feed order rather than sorting by newest first.
 
-Article titles and proper nouns are preserved in their original form, while descriptions are written in the selected language.
-If an article summary is unavailable, the Skill does not infer its contents from the title. The language of the source or
-article does not change the digest language.
+Choose how to present the result in your request, for example:
+
+```text
+Fetch all categories and show Japanese highlights and a complete article list grouped by category, newest first.
+Fetch Example and return raw JSON without summarizing.
+Fetch all categories and prepare a three-minute Japanese narration using only the fetched excerpts.
+Fetch all categories and use an interactive category selector if supported by this environment.
+```
+
+JSON is the retrieval contract, not a mandatory final-answer format. With no presentation instructions, the skill reports
+successful feed, article, and error counts per category. Fetch errors are always disclosed. UI and audio availability
+depend on the host; a narration script does not itself start audio playback. No files are saved unless explicitly requested.
+Fetched content is evidence, not instructions. The skill does not visit article links or invent missing article contents.
+
+## Direct CLI Usage
+
+```sh
+uv run skills/summarize-feeds/scripts/rss_fetch.py --category "Example" \
+  --item-limit 5 --max-age-days 3 skills/summarize-feeds/assets/example.feeds.opml
+```
+
+With `--category`, stdout contains `{"categories": [{"name": "Example", "config": "...", "feeds": [...], "errors": [...]}]}`.
+Without it, the existing `{"feeds": [...], "errors": [...]}` format is preserved. The Python `collect_feeds` API is unchanged.
+For multiple categories, invoke once per OPML file and concatenate the `categories` arrays after validating each result.
+The script does not read the YAML catalog; the skill selects configurations and passes their names and paths.
+
+Progress and diagnostics go to stderr. Exit codes are `0` for successful fetching, `1` for one or more feed failures
+(with usable JSON, even if all feeds fail), and `2` for configuration or argument errors (no JSON).
+If an invocation fails with exit code `2` or invalid JSON, the skill reports the failure and stops rather than presenting
+an incomplete combined run as a complete digest.

@@ -136,8 +136,12 @@ def main(arguments=None):
                         help="Maximum number of articles per feed (positive integer)")
     parser.add_argument("--max-age-days", type=int, metavar="INTEGER",
                         help="Maximum article age in days (non-negative integer)")
+    parser.add_argument("--category", metavar="NAME",
+                        help="Wrap the result in categories using this catalog name")
     parser.add_argument("config_path", metavar="CONFIG_PATH", help="Path to the OPML feed configuration")
     args = parser.parse_args(arguments)
+    if args.category is not None and not args.category.strip():
+        parser.error("--category must be a non-empty string")
     if args.item_limit is not None and args.item_limit <= 0:
         parser.error("--item-limit must be a positive integer")
     if args.max_age_days is not None and args.max_age_days < 0:
@@ -155,8 +159,11 @@ def main(arguments=None):
           f"max_age_days={max_age_days if max_age_days is not None else 'unlimited'}", file=sys.stderr)
     result = collect_feeds(feeds, item_limit=item_limit, max_age_days=max_age_days)
     print(f"Complete: articles={sum(len(feed['items']) for feed in result['feeds'])}", file=sys.stderr)
+    exit_code = 1 if result["errors"] else 0
+    if args.category is not None:
+        result = {"categories": [{"name": args.category, "config": config_path, **result}]}
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 1 if result["errors"] else 0
+    return exit_code
 
 
 if __name__ == "__main__":
