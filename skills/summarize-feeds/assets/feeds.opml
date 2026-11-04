@@ -4,6 +4,6 @@
     <title>Example</title>
   </head>
   <body>
-    <outline category='News' type='rss' text='The GitHub Blog' title='The GitHub Blog' xmlUrl='https://github.blog/feed/' htmlUrl='https://github.blog/'/>
+    <outline type='rss' category='News' text='The GitHub Blog' title='The GitHub Blog' xmlUrl='https://github.blog/feed/' htmlUrl='https://github.blog/'/>
   </body>
 </opml>
